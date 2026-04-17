@@ -8,42 +8,50 @@ import {
   ActivityIndicator,
   ScrollView
 } from 'react-native';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import { useAuthStore } from '../../store/authStore';
-import { createVault, getUserVaults } from '../../services/vaultService';
+import { useVaultStore } from '../../store/vaultStore';
+import { createVault, getUserVaults, joinVault } from '../../services/vaultService';
+import { VaultStackParamList } from '../../navigation/types';
+
+type VaultListNavigationProp = NativeStackNavigationProp<VaultStackParamList, 'VaultList'>;
 
 const VaultListScreen = () => {
   const { user } = useAuthStore();
+  const { setCurrentVault } = useVaultStore();
+  const navigation = useNavigation<VaultListNavigationProp>();
+
   const [vaults, setVaults] = useState<any[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [vaultName, setVaultName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Join Vault State
+  const [joinCode, setJoinCode] = useState('');
+  const [joining, setJoining] = useState(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
+
+  const fetchVaults = async () => {
+    if (!user?.uid) return;
+    
+    try {
+      setLoading(true);
+      setError(null);
+
+      const data = await getUserVaults(user.uid);
+      setVaults(data);
+    } catch (err) {
+      setError("Failed to load vaults");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    let isMounted = true;
-
-    const loadVaults = async () => {
-      if (!user?.uid) return;
-      
-      try {
-        setLoading(true);
-        setError(null);
-
-        const data = await getUserVaults(user.uid);
-        if (isMounted) setVaults(data);
-      } catch (err) {
-        if (isMounted) setError("Failed to load vaults");
-      } finally {
-        if (isMounted) setLoading(false);
-      }
-    };
-
-    loadVaults();
-
-    return () => {
-      isMounted = false;
-    };
+    fetchVaults();
   }, [user?.uid]);
 
   const handleCreateVault = async () => {
@@ -59,17 +67,64 @@ const VaultListScreen = () => {
       setIsCreating(false);
       
       // Refresh list after creation
-      try {
-        const updatedVaults = await getUserVaults(user.uid);
-        setVaults(updatedVaults);
-      } catch (e) {
-        // Do not break UI if refresh fails
-      }
+      await fetchVaults();
     } catch (err: any) {
       setError(err.message || "Failed to create vault");
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleJoinVault = async () => {
+    if (joining) return;
+
+    // 1. Auth Check
+    if (!user?.uid) {
+      setJoinError("User not authenticated");
+      return;
+    }
+
+    // 2. Sanitization
+    const code = joinCode.trim().toUpperCase();
+
+    // 3. Size Validation (Pre-Check)
+    if (code.length !== 6) {
+      setJoinError("Enter a valid 6-character code");
+      return;
+    }
+
+    try {
+      setJoining(true);
+      setJoinError(null);
+
+      // 4. API Call
+      await joinVault(code, user.uid);
+
+      // 5. Success Flow
+      setJoinCode('');
+      
+      if (user?.uid) {
+        await fetchVaults();
+      }
+
+    } catch (err: any) {
+      setJoinError(err.message || "Failed to join vault");
+    } finally {
+      setJoining(false);
+    }
+  };
+
+  const handleVaultPress = (vault: any) => {
+    // 1. Guard
+    if (!vault?.id) return;
+
+    // 2. Safe State Set
+    setCurrentVault(vault.id, vault.members || []);
+
+    // 3. Navigation
+    navigation.navigate("VaultDetail", {
+      vaultId: vault.id,
+    });
   };
 
   return (
@@ -118,6 +173,39 @@ const VaultListScreen = () => {
         </View>
       )}
 
+      {/* Join Vault UI */}
+      <View style={styles.joinSection}>
+        <TextInput
+          style={styles.joinInput}
+          placeholder="Enter 6-character invite code"
+          placeholderTextColor="#8E8E93"
+          value={joinCode}
+          onChangeText={(text) => {
+            setJoinCode(text.toUpperCase());
+            if (joinError) setJoinError(null);
+          }}
+          maxLength={6}
+          autoCapitalize="characters"
+        />
+        
+        <TouchableOpacity 
+          style={[
+            styles.joinButton, 
+            (joining || joinCode.trim().length !== 6) && styles.buttonDisabled
+          ]}
+          onPress={handleJoinVault}
+          disabled={joining || joinCode.trim().length !== 6}
+        >
+          {joining ? (
+            <ActivityIndicator color="#FFFFFF" />
+          ) : (
+            <Text style={styles.joinButtonText}>Join Vault</Text>
+          )}
+        </TouchableOpacity>
+        
+        {joinError && <Text style={styles.joinErrorText}>{joinError}</Text>}
+      </View>
+
       {loading && vaults.length === 0 ? (
         <View style={styles.centerContainer}>
           <ActivityIndicator size="large" color="#6C63FF" />
@@ -133,7 +221,12 @@ const VaultListScreen = () => {
       ) : (
         <ScrollView style={styles.list}>
           {vaults.map((vault, index) => (
-            <View key={vault.id} style={styles.vaultItem}>
+            <TouchableOpacity 
+              key={vault.id} 
+              style={styles.vaultItem}
+              onPress={() => handleVaultPress(vault)}
+              activeOpacity={0.7}
+            >
               <Text style={styles.vaultName}>
                 {index + 1}. {vault.name}
               </Text>
@@ -153,7 +246,7 @@ const VaultListScreen = () => {
                   </TouchableOpacity>
                 </>
               )}
-            </View>
+            </TouchableOpacity>
           ))}
         </ScrollView>
       )}
@@ -270,7 +363,40 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: 4,
   },
+  joinSection: {
+    backgroundColor: '#1C1C1E',
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#2C2C2E',
+    marginBottom: 24,
+  },
+  joinInput: {
+    backgroundColor: '#0B0B0B',
+    borderRadius: 8,
+    height: 48,
+    paddingHorizontal: 16,
+    color: '#FFFFFF',
+    fontSize: 16,
+    marginBottom: 12,
+  },
+  joinButton: {
+    backgroundColor: '#6C63FF',
+    height: 48,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  joinButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  joinErrorText: {
+    color: '#FF453A',
+    fontSize: 12,
+    marginTop: 8,
+  },
 });
-
 
 export default VaultListScreen;

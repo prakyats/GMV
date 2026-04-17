@@ -1,8 +1,9 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import VaultListScreen from '../screens/Vault/VaultListScreen';
+import VaultStackNavigator from './VaultStackNavigator';
 import OnThisDayScreen from '../screens/Resurface/OnThisDayScreen';
 import ProfileScreen from '../screens/Settings/ProfileScreen';
+import VaultDetailScreen from '../screens/Vault/VaultDetailScreen';
 
 import { BottomTabParamList } from './types';
 
@@ -28,7 +29,7 @@ const BottomTabNavigator = () => {
     >
       <Tab.Screen 
         name="Vaults" 
-        component={VaultListScreen}
+        component={VaultStackNavigator}
         options={{
           tabBarLabel: 'Vaults',
         }}
