@@ -6,9 +6,13 @@ import {
   updateDoc, 
   arrayUnion, 
   deleteDoc, 
-  serverTimestamp 
+  serverTimestamp,
+  query,
+  where,
+  getDocs 
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { generateInviteCode } from '../utils/inviteCode';
 
 /**
  * Fetches all vaults associated with a specific user.
@@ -76,11 +80,33 @@ export const createVault = async (name: string, userId: string): Promise<string>
       throw new Error("Vault name too long");
     }
 
-    // 2. Step 1: Create vault document
+    // 2. Step 1: Generate + validate inviteCode BEFORE database write
+    let inviteCode = generateInviteCode();
+    let exists = true;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 5;
+
+    while (exists && attempts < MAX_ATTEMPTS) {
+      const snapshot = await getDocs(
+        query(collection(db, "vaults"), where("inviteCode", "==", inviteCode))
+      );
+      exists = !snapshot.empty;
+      if (exists) {
+        inviteCode = generateInviteCode();
+      }
+      attempts++;
+    }
+
+    if (exists) {
+      throw new Error("Failed to generate unique invite code");
+    }
+
+    // 3. Step 2: Create vault document
     vaultRef = await addDoc(collection(db, "vaults"), {
       name: trimmedName,
       createdBy: userId,
       members: [userId],
+      inviteCode,
       createdAt: serverTimestamp()
     });
 
