@@ -1,12 +1,24 @@
 import React, { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../services/firebase';
 import { useAuthStore } from '../store/authStore';
 
 import BottomTabNavigator from './BottomTabNavigator';
 import AuthNavigator from './AuthNavigator';
+
+const AppTheme = {
+  ...DarkTheme,
+  colors: {
+    ...DarkTheme.colors,
+    background: '#0B0B0B',
+    card: '#1C1C1E',
+    text: '#FFFFFF',
+    border: '#2C2C2E',
+    primary: '#6C63FF',
+  },
+};
 
 const AppNavigator = () => {
   const { user, loading, setUser, setLoading } = useAuthStore();
@@ -29,7 +41,7 @@ const AppNavigator = () => {
   }
 
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={AppTheme}>
       {user ? <BottomTabNavigator /> : <AuthNavigator />}
     </NavigationContainer>
   );
