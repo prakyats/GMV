@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   ScrollView
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import { useAuthStore } from '../../store/authStore';
 import { createVault, getUserVaults } from '../../services/vaultService';
 
@@ -136,6 +137,22 @@ const VaultListScreen = () => {
               <Text style={styles.vaultName}>
                 {index + 1}. {vault.name}
               </Text>
+              
+              {vault.inviteCode && (
+                <>
+                  <Text style={styles.inviteCodeText}>
+                    Code: {vault.inviteCode}
+                  </Text>
+                  <TouchableOpacity 
+                    onPress={() => Clipboard.setStringAsync(vault.inviteCode)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={styles.copyText}>
+                      Tap to copy code
+                    </Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           ))}
         </ScrollView>
@@ -241,6 +258,17 @@ const styles = StyleSheet.create({
   vaultName: {
     color: '#FFFFFF',
     fontSize: 16,
+  },
+  inviteCodeText: {
+    color: '#8E8E93',
+    fontSize: 14,
+    marginTop: 4,
+  },
+  copyText: {
+    color: '#6C63FF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginTop: 4,
   },
 });
 
