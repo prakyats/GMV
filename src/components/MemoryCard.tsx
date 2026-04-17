@@ -4,16 +4,15 @@ import {
   Text, 
   StyleSheet, 
   Image, 
-  TouchableOpacity, 
-  Dimensions 
+  TouchableOpacity 
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { StackNavigationProp } from '@react-navigation/stack';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { VaultStackParamList } from '../navigation/types';
 import { Memory } from '../services/memoryService';
 import ReactionBar from './ReactionBar';
 
-type NavigationProp = StackNavigationProp<VaultStackParamList, 'VaultDetail'>;
+type NavigationProp = NativeStackNavigationProp<VaultStackParamList, 'VaultDetail'>;
 
 interface MemoryCardProps {
   memory: Memory;

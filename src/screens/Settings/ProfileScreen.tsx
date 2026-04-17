@@ -1,3 +1,5 @@
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { authService } from '../../services/authService';
 import { useVaultStore } from '../../store/vaultStore'; // Added to purge state on logout
 
