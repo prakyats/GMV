@@ -91,7 +91,12 @@ service cloud.firestore {
           );
 
         // IMMUTABLE MEMORIES
-        allow update, delete: if false;
+        // ALLOW members to react (only 'reactions' field can be updated)
+        allow update: if request.auth != null
+          && isVaultMember()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions']);
+
+        allow delete: if false; // Production Rule: No member can delete a memory once shared
       }
     }
   }
