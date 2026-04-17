@@ -17,6 +17,7 @@ import { VaultStackParamList } from '../../navigation/types';
 import { useAuthStore } from '../../store/authStore';
 import { addMemory, subscribeToMemories, Memory } from '../../services/memoryService';
 import ImagePickerButton from '../../components/ImagePickerButton';
+import MemoryCard from '../../components/MemoryCard';
 import { compressImage } from '../../utils/imageCompressor';
 import { uploadImage } from '../../services/storage';
 
@@ -176,32 +177,10 @@ const VaultDetailScreen = () => {
             </View>
           }
           renderItem={({ item }) => (
-            <View style={styles.memoryItem}>
-              {item.type === 'image' && item.imageURL ? (
-                <View>
-                  <Image
-                    source={{ uri: item.imageURL }}
-                    style={styles.memoryImage}
-                    resizeMode="cover"
-                  />
-                  {item.text ? (
-                    <Text style={styles.memoryText}>{item.text}</Text>
-                  ) : null}
-                </View>
-              ) : (
-                <Text style={styles.memoryText}>{item.text}</Text>
-              )}
-              
-              <Text style={styles.memoryDate}>
-                {(() => {
-                  const displayDate = item.memoryDate ?? item.createdAt ?? new Date();
-                  const dateObj = displayDate && typeof displayDate === 'object' && 'seconds' in displayDate
-                    ? new Date(displayDate.seconds * 1000)
-                    : new Date(displayDate as any);
-                  return dateObj.toDateString();
-                })()}
-              </Text>
-            </View>
+            <MemoryCard 
+              memory={item} 
+              vaultId={vaultId!} 
+            />
           )}
         />
       )}
