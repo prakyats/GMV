@@ -5,6 +5,7 @@ import {
   getDoc,
   updateDoc, 
   arrayUnion, 
+  arrayRemove,
   deleteDoc, 
   serverTimestamp,
   query,
@@ -162,25 +163,30 @@ export const joinVault = async (inviteCode: string, userId: string) => {
     const vaultId = vaultDoc.id;
     const data = vaultDoc.data();
 
-    // 4. Check Membership
+    // 4. Safety Check
+    if (!Array.isArray(data.members)) {
+      throw new Error("Invalid vault data");
+    }
+
+    // 5. Check Membership
     if (data.members.includes(userId)) {
       throw new Error("Already a member");
     }
 
-    // 5. Update Vault First
+    // 6. Update Vault First
     await updateDoc(doc(db, "vaults", vaultId), {
       members: arrayUnion(userId)
     });
 
-    // 6. Update User
+    // 7. Update User
     try {
       await updateDoc(doc(db, "users", userId), {
         vaultIds: arrayUnion(vaultId)
       });
-    } catch (error) {
-      // Rollback vault membership
+    } catch (err) {
+      // Rollback vault membership safely
       await updateDoc(doc(db, "vaults", vaultId), {
-        members: data.members
+        members: arrayRemove(userId)
       });
       throw new Error("Failed to join vault");
     }
