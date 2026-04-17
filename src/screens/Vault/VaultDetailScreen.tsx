@@ -16,6 +16,7 @@ import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { VaultStackParamList } from '../../navigation/types';
 import { useAuthStore } from '../../store/authStore';
 import { addMemory, subscribeToMemories, Memory } from '../../services/memoryService';
+import { Timestamp } from 'firebase/firestore'; // Added for memoryDate
 import ImagePickerButton from '../../components/ImagePickerButton';
 import MemoryCard from '../../components/MemoryCard';
 import { compressImage } from '../../utils/imageCompressor';
@@ -87,6 +88,7 @@ const VaultDetailScreen = () => {
         imageURL: imageURL,
         createdBy: user.uid,
         memoryDate: Timestamp.fromDate(selectedDate),
+        reactions: {},
       });
 
       // STEP 3: Reset UI
