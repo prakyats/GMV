@@ -37,7 +37,7 @@ export const authService = {
   /**
    * Registers a new user with email and password.
    */
-  register: async (email: string, password: string) => {
+  register: async (email: string, password: string, name: string) => {
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
@@ -45,7 +45,7 @@ export const authService = {
       // Create user document in Firestore
       await setDoc(doc(db, "users", user.uid), {
         email: user.email,
-        displayName: "",
+        displayName: name.trim(),
         photoURL: null,
         vaultIds: [],
         createdAt: serverTimestamp(),
