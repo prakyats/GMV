@@ -1,142 +1,320 @@
-# Git Workflow Rules (Industry Standard)
+# Git Workflow Rules (Production-Level - Strict Mode)
 
 You are responsible for managing Git operations in a clean, structured, and professional way after every meaningful code change.
 
-STRICT RULES:
-- NEVER create a single large commit for everything
-- ALWAYS group commits logically by feature or concern
-- NEVER use vague commit messages like "update", "fix", "changes"
-- NEVER commit sensitive files (.env, API keys, credentials)
-- ALWAYS follow a clean commit structure
-- KEEP commits readable for code reviewers
+This is a STRICT system. No shortcuts.
 
 ---
 
-## 1. COMMIT STRATEGY
+# 🔴 CORE PRINCIPLE
 
-Split changes into logical commits based on:
+Git is NOT storage.
 
-- Feature (auth, vault, navigation)
-- Fix (bug fixes, edge cases)
-- Refactor (code cleanup, no behavior change)
-- Chore (config, UI polish, minor updates)
+Git is:
+✔ a history of decisions
+✔ a timeline of development
+✔ always deployable at any point
 
 ---
 
-## 2. COMMIT MESSAGE FORMAT
+# 🔴 HARD RULE: CODE MUST RUN AFTER EVERY COMMIT
 
-Follow this format STRICTLY:
+* NEVER commit broken code
+* EVERY commit must run successfully
+* If unsure → DO NOT commit
 
-<type>: <short clear description>
+If broken:
+
+✔ Fix immediately
+OR
+✔ Revert commit
+
+---
+
+# 🔴 COMMIT SIZE RULE (NON-NEGOTIABLE)
+
+Each commit must:
+
+✔ Do ONE logical thing
+✔ Be understandable in <10 seconds
+✔ Be safely revertable
+
+BAD:
+
+* Multiple features in one commit ❌
+* UI + backend + config mixed ❌
+
+GOOD:
+
+* feat: add image compression utility ✔
+
+---
+
+# 🔴 ATOMIC COMMIT RULE
+
+Each commit must:
+
+✔ Have a single responsibility
+✔ Not depend on a future commit to work
+✔ Not leave system in partial state
+
+---
+
+# 🔴 COMMIT MESSAGE FORMAT
+
+STRICT:
+
+<type>: <clear, specific description>
+
+DO NOT use:
+
+* update
+* changes
+* final
+* done
 
 Examples:
 
-feat: implement vault creation with rollback safety  
-feat: add invite code generation and validation  
-fix: prevent state update on unmounted component  
-refactor: clean up auth service error handling  
-chore: improve UI loading states and error messages  
+feat: implement image upload pipeline with compression
+fix: handle null timestamp in memory mapping
+refactor: simplify vault membership logic
+chore: add expo-image-picker dependency
 
 ---
 
-## 3. COMMIT TYPES
+# 🔴 COMMIT TYPES (ONLY THESE)
 
-Use ONLY these:
-
-- feat → new feature
-- fix → bug fix
-- refactor → internal improvement (no feature change)
-- chore → minor updates, UI tweaks, configs
+* feat → new feature
+* fix → bug fix
+* refactor → internal improvement
+* chore → config, dependencies, minor updates
 
 ---
 
-## 4. STAGING RULES
+# 🔴 STAGING RULES
 
-- Stage ONLY relevant files per commit
-- DO NOT use `git add .` blindly
-- Use selective staging
+* Stage ONLY relevant files
+* Avoid `git add .` unless verified
+* Never include unrelated changes
+
+---
+
+# 🔴 COMMIT ORDER (MANDATORY)
+
+1. Core logic (services, business logic)
+2. State management
+3. UI / screens
+4. Styling / minor updates
+
+---
+
+# 🔴 PRE-COMMIT CHECKLIST (MANDATORY)
+
+Before EVERY commit:
+
+✔ App runs
+✔ No crashes
+✔ No console.log
+✔ No unused imports
+✔ No debug code
+✔ No sensitive data (.env, API keys)
+✔ Files formatted
+
+---
+
+# 🔴 DEBUG RULE
+
+* NEVER commit debug logs
+* Remove ALL console.log before commit
+
+---
+
+# 🔴 DEPENDENCY RULE
+
+* Dependencies must be committed separately
 
 Example:
 
-git add src/services/vaultService.ts
-git commit -m "feat: implement vault creation with rollback safety"
+chore: add expo-image-manipulator dependency
 
 ---
 
-## 5. COMMIT ORDER (IMPORTANT)
+# 🔴 REFACTOR RULE
 
-Always commit in this order:
+Refactor must:
 
-1. Core logic (services, business logic)
-2. State management / hooks
-3. UI / screens
-4. Styling / minor changes
+✔ NOT change behavior
+✔ ONLY improve structure
 
----
-
-## 6. PRE-COMMIT CHECKLIST
-
-Before committing:
-
-- Code runs without errors
-- No console logs or debug code left
-- No unused imports
-- No sensitive data exposed
-- Files are properly formatted
+If behavior changes → use `feat`
 
 ---
 
-## 7. PUSH RULES
+# 🔴 FAILURE RULE (CRITICAL)
 
-After commits:
+If a commit introduces a bug:
 
-- Ensure branch is correct (main or feature branch)
-- Push with:
-
-git push origin main
-
+✔ Fix immediately
 OR
+✔ Revert commit
 
-git push -u origin <feature-branch>
-
----
-
-## 8. OPTIONAL (ADVANCED - IF APPLICABLE)
-
-For larger features:
-
-- Use separate branch:
-
-git checkout -b feature/vault-creation
-
-- Merge after completion
+DO NOT stack broken commits
 
 ---
 
-## 9. WHAT NOT TO DO (CRITICAL)
+# 🔴 BRANCHING STRATEGY (STRICT)
 
-DO NOT:
+## CORE RULES
 
-- Commit everything at once
-- Use "final", "done", "last", "update"
-- Push broken code
-- Commit .env or credentials
-- Mix multiple features in one commit
-
----
-
-## 10. EXPECTED OUTPUT
-
-After any code change:
-
-- Analyze changes
-- Split into logical commits
-- Generate correct commit messages
-- Execute git add + commit for each
-- Push cleanly
+* NEVER work on `main` for features
+* ALWAYS use feature branches
+* KEEP branches small
+* DELETE after merge
 
 ---
 
-END GOAL:
+# 🔴 WHEN TO CREATE A BRANCH
 
-Your Git history should look like a professional production project, readable and review-friendly.
+Create for:
+
+✔ Feature
+✔ Bug fix
+✔ Refactor affecting multiple files
+
+Do NOT create for:
+
+* Minor UI text
+* Small styling
+
+---
+
+# 🔴 BRANCH NAMING
+
+feature/<name>
+fix/<name>
+refactor/<name>
+
+Examples:
+
+feature/multimodal-memories
+feature/on-this-day
+fix/image-upload-crash
+
+---
+
+# 🔴 BRANCH WORKFLOW
+
+1. Create branch:
+
+git checkout -b feature/<name>
+
+2. Work inside branch
+3. Make atomic commits
+4. Push branch
+
+---
+
+# 🔴 BRANCH SYNC RULE (CRITICAL)
+
+Before merging:
+
+git checkout feature/<name>
+git pull origin main
+
+✔ Prevents conflicts
+
+---
+
+# 🔴 MERGE STRATEGY
+
+1. Switch to main:
+
+git checkout main
+
+2. Pull latest:
+
+git pull origin main
+
+3. Merge:
+
+git merge feature/<name>
+
+---
+
+# 🔴 MERGE CONFLICT RULE
+
+If conflict occurs:
+
+✔ Resolve manually
+✔ Understand BOTH sides
+✔ Do NOT blindly accept changes
+✔ Test app after resolving
+
+---
+
+# 🔴 PRE-MERGE CHECKLIST (MANDATORY)
+
+✔ App runs
+✔ No crashes
+✔ Feature fully complete
+✔ No console logs
+✔ No partial logic
+✔ All flows tested
+
+---
+
+# 🔴 POST-MERGE RULE
+
+✔ Test app again on main
+✔ Ensure no regression
+
+---
+
+# 🔴 DELETE BRANCH (MANDATORY)
+
+After merge:
+
+git branch -d feature/<name>
+
+---
+
+# 🔴 OPTIONAL (ADVANCED)
+
+Clean history:
+
+git rebase -i main
+
+Use ONLY if confident
+
+---
+
+# 🔴 FULL WORKFLOW (EXPECTED BEHAVIOR)
+
+For EVERY feature:
+
+1. Create branch
+2. Implement feature
+3. Make atomic commits
+4. Validate after each commit
+5. Push branch
+6. Sync with main
+7. Final validation
+8. Merge
+9. Test on main
+10. Delete branch
+
+---
+
+# 🎯 FINAL STANDARD
+
+Your repository must:
+
+✔ Have clean, readable history
+✔ Show clear feature evolution
+✔ Be understandable to any developer
+✔ Be deployable at ANY commit
+✔ Reflect production-level discipline
+
+---
+
+NO SHORTCUTS.
