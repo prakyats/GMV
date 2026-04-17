@@ -17,6 +17,7 @@ export interface Memory {
   imageURL: string | null;
   createdBy: string;
   createdAt: Timestamp | null;
+  memoryDate: Timestamp | null;
 }
 
 /**
@@ -40,6 +41,7 @@ export async function addMemory(
     imageURL: payload.imageURL || null,
     createdBy: payload.createdBy,
     createdAt: serverTimestamp(),
+    memoryDate: payload.memoryDate ?? serverTimestamp(),
   });
 }
 
@@ -70,6 +72,11 @@ function mapMemoryDoc(doc: any): Memory {
     createdAt: 
       data.createdAt && typeof data.createdAt.seconds === 'number'
         ? data.createdAt as Timestamp
+        : null,
+
+    memoryDate:
+      data.memoryDate && typeof data.memoryDate.seconds === 'number'
+        ? data.memoryDate as Timestamp
         : null,
   };
 }
