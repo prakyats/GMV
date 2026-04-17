@@ -46,7 +46,9 @@ export const getUserVaults = async (userId: string) => {
       .filter(doc => doc.exists())
       .map(doc => ({
         id: doc.id,
-        ...doc.data()
+        name: doc.data()?.name,
+        inviteCode: doc.data()?.inviteCode,
+        createdAt: doc.data()?.createdAt
       }));
 
     // Sort by createdAt (newest first)
