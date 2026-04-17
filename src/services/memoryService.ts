@@ -18,6 +18,7 @@ export interface Memory {
   createdBy: string;
   createdAt: Timestamp | null;
   memoryDate: Timestamp | null;
+  reactions: Record<string, string>; // { userId: emoji }
 }
 
 /**
@@ -78,6 +79,11 @@ function mapMemoryDoc(doc: any): Memory {
       data.memoryDate && typeof data.memoryDate.seconds === 'number'
         ? data.memoryDate as Timestamp
         : null,
+
+    reactions:
+      data.reactions && typeof data.reactions === 'object'
+        ? data.reactions as Record<string, string>
+        : {},
   };
 }
 
