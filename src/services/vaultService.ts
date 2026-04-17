@@ -132,3 +132,66 @@ export const createVault = async (name: string, userId: string): Promise<string>
     throw error;
   }
 };
+
+/**
+ * Joins an existing vault using a 6-character invite code.
+ * Includes a manual rollback for the vault membership if the user record update fails.
+ */
+export const joinVault = async (inviteCode: string, userId: string) => {
+  try {
+    const trimmedCode = inviteCode.trim();
+
+    // 1. Validation
+    if (trimmedCode.length !== 6) {
+      throw new Error("Invalid invite code");
+    }
+
+    // 2. Find Vault
+    const q = query(
+      collection(db, "vaults"),
+      where("inviteCode", "==", trimmedCode)
+    );
+    const snapshot = await getDocs(q);
+
+    if (snapshot.empty) {
+      throw new Error("Vault not found");
+    }
+
+    // 3. Extract Data
+    const vaultDoc = snapshot.docs[0];
+    const vaultId = vaultDoc.id;
+    const data = vaultDoc.data();
+
+    // 4. Check Membership
+    if (data.members.includes(userId)) {
+      throw new Error("Already a member");
+    }
+
+    // 5. Update Vault First
+    await updateDoc(doc(db, "vaults", vaultId), {
+      members: arrayUnion(userId)
+    });
+
+    // 6. Update User
+    try {
+      await updateDoc(doc(db, "users", userId), {
+        vaultIds: arrayUnion(vaultId)
+      });
+    } catch (error) {
+      // Rollback vault membership
+      await updateDoc(doc(db, "vaults", vaultId), {
+        members: data.members
+      });
+      throw new Error("Failed to join vault");
+    }
+
+    return { vaultId };
+
+  } catch (error: any) {
+    const mappedMessages = ["Invalid invite code", "Vault not found", "Already a member", "Failed to join vault"];
+    if (mappedMessages.includes(error.message)) {
+      throw error;
+    }
+    throw new Error("Failed to join vault");
+  }
+};
