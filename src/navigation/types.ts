@@ -3,6 +3,11 @@ export type AuthStackParamList = {
   Register: undefined;
 };
 
+export type VaultStackParamList = {
+  VaultList: undefined;
+  VaultDetail: { vaultId: string };
+};
+
 export type BottomTabParamList = {
   Vaults: undefined;
   OnThisDay: undefined;
