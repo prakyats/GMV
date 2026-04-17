@@ -31,6 +31,7 @@ const VaultDetailScreen = () => {
   const [memories, setMemories] = useState<Memory[]>([]);
   const [newMemory, setNewMemory] = useState('');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState(new Date()); // Added for memoryDate support
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -84,6 +85,7 @@ const VaultDetailScreen = () => {
         text: text,
         imageURL: imageURL,
         createdBy: user.uid,
+        memoryDate: Timestamp.fromDate(selectedDate),
       });
 
       // STEP 3: Reset UI
@@ -192,10 +194,11 @@ const VaultDetailScreen = () => {
               
               <Text style={styles.memoryDate}>
                 {(() => {
-                  const date = item.createdAt
-                    ? new Date(item.createdAt.seconds * 1000)
-                    : new Date();
-                  return date.toLocaleDateString();
+                  const displayDate = item.memoryDate ?? item.createdAt ?? new Date();
+                  const dateObj = displayDate && typeof displayDate === 'object' && 'seconds' in displayDate
+                    ? new Date(displayDate.seconds * 1000)
+                    : new Date(displayDate as any);
+                  return dateObj.toDateString();
                 })()}
               </Text>
             </View>
