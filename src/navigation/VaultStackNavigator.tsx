@@ -2,6 +2,7 @@ import React from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import VaultListScreen from '../screens/Vault/VaultListScreen';
 import VaultDetailScreen from '../screens/Vault/VaultDetailScreen';
+import MemoryDetailScreen from '../screens/Vault/MemoryDetailScreen';
 import { VaultStackParamList } from './types';
 
 const Stack = createNativeStackNavigator<VaultStackParamList>();
@@ -16,6 +17,7 @@ const VaultStackNavigator = () => {
       initialRouteName="VaultList"
       screenOptions={{
         headerShown: false,
+        contentStyle: { backgroundColor: '#0B0B0B' },
       }}
     >
       <Stack.Screen 
@@ -25,6 +27,10 @@ const VaultStackNavigator = () => {
       <Stack.Screen 
         name="VaultDetail" 
         component={VaultDetailScreen} 
+      />
+      <Stack.Screen 
+        name="MemoryDetail" 
+        component={MemoryDetailScreen} 
       />
     </Stack.Navigator>
   );
