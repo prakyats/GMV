@@ -70,11 +70,13 @@ service cloud.firestore {
             'text',
             'imageURL',
             'createdBy',
-            'createdAt'
+            'createdAt',
+            'memoryDate'
           ])
           && request.resource.data.type in ['text', 'image']
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.createdAt is timestamp
+          && request.resource.data.memoryDate is timestamp
           && (
             (request.resource.data.type == 'text'
               && request.resource.data.text is string
