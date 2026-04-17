@@ -14,6 +14,7 @@ import { authService } from '../../services/authService';
 type Props = NativeStackScreenProps<AuthStackParamList, 'Register'>;
 
 const RegisterScreen = ({ navigation }: Props) => {
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -25,6 +26,11 @@ const RegisterScreen = ({ navigation }: Props) => {
     const emailClean = email.trim().toLowerCase();
 
     // 1. Validation
+    if (name.trim().length < 2) {
+      setError("Name must be at least 2 characters");
+      return;
+    }
+
     if (!emailClean || !password) {
       setError('All fields are required');
       return;
@@ -44,7 +50,7 @@ const RegisterScreen = ({ navigation }: Props) => {
     try {
       setLoading(true);
       setError(null);
-      await authService.register(emailClean, password);
+      await authService.register(emailClean, password, name.trim());
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -58,6 +64,16 @@ const RegisterScreen = ({ navigation }: Props) => {
       <Text style={styles.subtitle}>Create an account to start sharing</Text>
       
       <View style={styles.inputContainer}>
+        <TextInput
+          style={styles.input}
+          placeholder="Name"
+          placeholderTextColor="#8E8E93"
+          value={name}
+          onChangeText={(text) => {
+            setName(text);
+            if (error) setError(null);
+          }}
+        />
         <TextInput
           style={styles.input}
           placeholder="Email"
