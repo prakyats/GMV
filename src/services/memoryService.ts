@@ -157,3 +157,26 @@ export function subscribeToMemories(
     if (onError) onError(error);
   });
 }
+
+/**
+ * Subscribes to real-time updates for a single memory.
+ * Returns null if the memory no longer exists.
+ */
+export function subscribeToMemory(
+  vaultId: string, 
+  memoryId: string, 
+  onUpdate: (memory: Memory | null) => void
+) {
+  const memoryRef = doc(db, 'vaults', vaultId, 'memories', memoryId);
+
+  return onSnapshot(memoryRef, (docSnap) => {
+    if (!docSnap.exists()) {
+      onUpdate(null);
+      return;
+    }
+
+    onUpdate(mapMemoryDoc(docSnap));
+  }, (error) => {
+    console.error("Single Memory Subscription Error:", error);
+  });
+}
