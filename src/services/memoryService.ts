@@ -6,7 +6,9 @@ import {
   orderBy, 
   serverTimestamp, 
   onSnapshot,
-  Timestamp 
+  Timestamp,
+  runTransaction,
+  doc
 } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -85,6 +87,43 @@ function mapMemoryDoc(doc: any): Memory {
         ? data.reactions as Record<string, string>
         : {},
   };
+}
+
+/**
+ * Toggles an emoji reaction for a user on a specific memory.
+ * Uses a Firestore transaction for atomic safe-updates.
+ */
+export async function toggleReaction(
+  vaultId: string,
+  memoryId: string,
+  userId: string,
+  emoji: string
+) {
+  const memoryRef = doc(db, 'vaults', vaultId, 'memories', memoryId);
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      const memoryDoc = await transaction.get(memoryRef);
+      if (!memoryDoc.exists()) {
+        throw new Error("Memory does not exist!");
+      }
+
+      const data = memoryDoc.data();
+      // Clone reactions to avoid direct mutation
+      const reactions = { ...(data.reactions || {}) };
+
+      if (reactions[userId] === emoji) {
+        delete reactions[userId];
+      } else {
+        reactions[userId] = emoji;
+      }
+
+      transaction.update(memoryRef, { reactions });
+    });
+  } catch (err) {
+    console.error("Transaction failed: ", err);
+    throw err;
+  }
 }
 
 /**
