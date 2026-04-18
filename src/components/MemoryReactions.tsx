@@ -18,11 +18,11 @@ interface ReactionBarProps {
 const EMOJIS = ['❤️', '👍', '😂', '😮', '😢'];
 
 /**
- * ReactionBar
+ * MemoryReactions
  * Renders a horizontal list of emojis with real-time counts.
  * Handles the optimistic UI and transactional logic for toggling reactions.
  */
-const ReactionBar: React.FC<ReactionBarProps> = ({ vaultId, memoryId, reactions }) => {
+const MemoryReactions: React.FC<ReactionBarProps> = ({ vaultId, memoryId, reactions }) => {
   const { user } = useAuthStore();
   const [loading, setLoading] = useState<string | null>(null);
 
@@ -111,4 +111,4 @@ const styles = StyleSheet.create({
   },
 });
 
-export default React.memo(ReactionBar);
+export default React.memo(MemoryReactions);
