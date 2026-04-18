@@ -6,6 +6,7 @@ export type AuthStackParamList = {
 export type VaultStackParamList = {
   VaultList: undefined;
   VaultDetail: { vaultId: string };
+  MemoryDetail: { memoryId: string; vaultId: string };
 };
 
 export type BottomTabParamList = {

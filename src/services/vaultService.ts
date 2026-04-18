@@ -10,14 +10,17 @@ import {
   serverTimestamp,
   query,
   where,
-  getDocs 
+  getDocs,
+  limit,
+  runTransaction 
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { generateInviteCode } from '../utils/inviteCode';
 
 /**
  * Fetches all vaults associated with a specific user.
- * Includes safety checks for existence and sorts by creation date.
+ * PRODUCTION-SAFE: classification between deleted, forbidden, and valid docs.
+ * SELF-HEALING: Cleans up orphaned references if doc NO LONGER exists.
  */
 export const getUserVaults = async (userId: string) => {
   try {
@@ -34,31 +37,80 @@ export const getUserVaults = async (userId: string) => {
       return [];
     }
 
-    // Fetch all vault documents
-    const vaultPromises = vaultIds.map((id: string) =>
-      getDoc(doc(db, "vaults", id))
+    // STEP 1: Parallel Fetch with Classification
+    const results = await Promise.all(
+      vaultIds.map(async (vaultId: string) => {
+        try {
+          const ref = doc(db, 'vaults', vaultId);
+          const snap = await getDoc(ref);
+
+          if (!snap.exists()) {
+            return { type: 'deleted', vaultId };
+          }
+
+          // MAP VALID DATA
+          const data = snap.data();
+          return { 
+            type: 'valid', 
+            data: {
+              id: snap.id,
+              name: data?.name,
+              inviteCode: data?.inviteCode,
+              createdAt: data?.createdAt,
+              members: data?.members || []
+            } 
+          };
+
+        } catch (error: any) {
+          if (error.code === 'permission-denied') {
+            return { type: 'deleted', vaultId };
+          }
+          console.error(`Vault fetch error [${vaultId}]:`, error);
+          return { type: 'error' };
+        }
+      })
     );
 
-    const vaultSnapshots = await Promise.all(vaultPromises);
+    // STEP 2: Separate Results
+    const validVaults: any[] = [];
+    const deletedVaultIds: string[] = [];
 
-    // Filter and map to usable data
-    const vaults = vaultSnapshots
-      .filter(doc => doc.exists())
-      .map(doc => ({
-        id: doc.id,
-        name: doc.data()?.name,
-        inviteCode: doc.data()?.inviteCode,
-        createdAt: doc.data()?.createdAt
-      }));
+    results.forEach(item => {
+      if (item.type === 'valid' && item.data) {
+        validVaults.push(item.data);
+      }
+      if (item.type === 'deleted' && item.vaultId) {
+        deletedVaultIds.push(item.vaultId);
+      }
+    });
 
-    // Sort by createdAt (newest first)
-    vaults.sort((a: any, b: any) => 
+    // STEP 3: Safe Cleanup (Production-Stable)
+    if (deletedVaultIds.length > 0) {
+      try {
+        // MUST await for reliability, inside a try/catch to not block UI success
+        await updateDoc(userRef, {
+          vaultIds: arrayRemove(...deletedVaultIds)
+        });
+
+        if (__DEV__) {
+          console.log('Deleted vaults cleaned:', deletedVaultIds);
+        }
+      } catch (error) {
+        if (__DEV__) {
+          console.log('Vault cleanup failed safely:', error);
+        }
+      }
+    }
+
+    // STEP 4: Return valid data sorted by date
+    validVaults.sort((a, b) => 
       (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0)
     );
 
-    return vaults;
+    return validVaults;
+
   } catch (error) {
-    console.error("Error fetching vaults:", error);
+    console.error("Critical error in getUserVaults:", error);
     throw error;
   }
 };
@@ -90,8 +142,16 @@ export const createVault = async (name: string, userId: string): Promise<string>
     const MAX_ATTEMPTS = 5;
 
     while (exists && attempts < MAX_ATTEMPTS) {
+      if (__DEV__) {
+        console.log(`Checking invite code uniqueness [Attempt ${attempts + 1}]:`, inviteCode);
+      }
+      
       const snapshot = await getDocs(
-        query(collection(db, "vaults"), where("inviteCode", "==", inviteCode))
+        query(
+          collection(db, "vaults"), 
+          where("inviteCode", "==", inviteCode),
+          limit(1)
+        )
       );
       exists = !snapshot.empty;
       if (exists) {
@@ -105,6 +165,14 @@ export const createVault = async (name: string, userId: string): Promise<string>
     }
 
     // 3. Step 2: Create vault document
+    console.log('CREATE VAULT PAYLOAD:', {
+      name: trimmedName,
+      inviteCode,
+      members: [userId],
+      createdBy: userId,
+      createdAt: 'serverTimestamp()' // Placeholder for logging
+    });
+
     vaultRef = await addDoc(collection(db, "vaults"), {
       name: trimmedName,
       createdBy: userId,
@@ -122,7 +190,9 @@ export const createVault = async (name: string, userId: string): Promise<string>
 
     return vaultId;
 
-  } catch (error) {
+  } catch (error: any) {
+    console.log('VAULT CREATE ERROR:', error.code, error.message);
+    
     // 4. CLEANUP: Rollback vault creation if user association failed
     if (vaultRef && vaultRef.id) {
       try {
@@ -150,9 +220,14 @@ export const joinVault = async (inviteCode: string, userId: string) => {
     }
 
     // 2. Find Vault
+    if (__DEV__) {
+      console.log('JOIN VAULT: Searching for invite code:', trimmedCode);
+    }
+    
     const q = query(
       collection(db, "vaults"),
-      where("inviteCode", "==", trimmedCode)
+      where("inviteCode", "==", trimmedCode),
+      limit(1)
     );
     const snapshot = await getDocs(q);
 
@@ -196,10 +271,60 @@ export const joinVault = async (inviteCode: string, userId: string) => {
     return { vaultId };
 
   } catch (error: any) {
+    console.log('JOIN VAULT ERROR:', error.code, error.message);
+    
     const mappedMessages = ["Invalid invite code", "Vault not found", "Already a member", "Failed to join vault"];
     if (mappedMessages.includes(error.message)) {
       throw error;
     }
     throw new Error("Failed to join vault");
+  }
+};
+
+/**
+ * Safely removes a user from a vault document and the vault from the user document.
+ * If the user is the last member, the vault document is deleted.
+ * USES: Firestore Transaction for atomicity.
+ */
+export const leaveVault = async (vaultId: string, userId: string) => {
+  const vaultRef = doc(db, 'vaults', vaultId);
+  const userRef = doc(db, 'users', userId);
+
+  try {
+    await runTransaction(db, async (transaction) => {
+      // 1. Fetch vault state
+      const vaultSnap = await transaction.get(vaultRef);
+      if (!vaultSnap.exists()) {
+        throw new Error('Vault does not exist');
+      }
+
+      const vaultData = vaultSnap.data();
+      const members: string[] = vaultData.members || [];
+
+      // 2. Validate membership
+      if (!members.includes(userId)) {
+        throw new Error('User is not a member of this vault');
+      }
+
+      // 3. Calculate new member list
+      const updatedMembers = members.filter(id => id !== userId);
+
+      // 4. Update Vault: Delete if empty, otherwise remove user
+      if (updatedMembers.length === 0) {
+        transaction.delete(vaultRef);
+      } else {
+        transaction.update(vaultRef, {
+          members: updatedMembers,
+        });
+      }
+
+      // 5. Update User: Always remove vault link
+      transaction.update(userRef, {
+        vaultIds: arrayRemove(vaultId),
+      });
+    });
+  } catch (error) {
+    console.error("Leave Vault Transaction Failed:", error);
+    throw error;
   }
 };

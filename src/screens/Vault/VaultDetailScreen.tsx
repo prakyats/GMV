@@ -13,26 +13,34 @@ import {
   Image
 } from 'react-native';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { VaultStackParamList } from '../../navigation/types';
 import { useAuthStore } from '../../store/authStore';
+import { useVaultStore } from '../../store/vaultStore';
 import { addMemory, subscribeToMemories, Memory } from '../../services/memoryService';
+import { leaveVault } from '../../services/vaultService';
+import { Timestamp } from 'firebase/firestore'; // Added for memoryDate
 import ImagePickerButton from '../../components/ImagePickerButton';
+import MemoryCard from '../../components/MemoryCard';
 import { compressImage } from '../../utils/imageCompressor';
 import { uploadImage } from '../../services/storage';
+import LoadingSkeleton from '../../components/LoadingSkeleton';
 
 type VaultDetailRouteProp = RouteProp<VaultStackParamList, 'VaultDetail'>;
 
 const VaultDetailScreen = () => {
   const route = useRoute<VaultDetailRouteProp>();
-  const navigation = useNavigation();
+  const navigation = useNavigation<NativeStackNavigationProp<VaultStackParamList>>();
   const { vaultId } = route.params || {};
   const { user } = useAuthStore();
 
   const [memories, setMemories] = useState<Memory[]>([]);
   const [newMemory, setNewMemory] = useState('');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState(new Date()); // Added for memoryDate support
   const [loading, setLoading] = useState(true);
   const [isAdding, setIsAdding] = useState(false);
+  const [isLeaving, setIsLeaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -84,6 +92,7 @@ const VaultDetailScreen = () => {
         text: text,
         imageURL: imageURL,
         createdBy: user.uid,
+        memoryDate: Timestamp.fromDate(selectedDate),
       });
 
       // STEP 3: Reset UI
@@ -101,6 +110,42 @@ const VaultDetailScreen = () => {
     } finally {
       setIsAdding(false);
     }
+  };
+
+  const handleLeaveVault = async () => {
+    if (isLeaving) return;
+    if (!vaultId || !user?.uid) return;
+
+    Alert.alert(
+      "Leave Vault",
+      "Are you sure you want to leave this vault? If you are the last member, the vault and all its memories will be permanently deleted.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Leave", 
+          style: "destructive",
+          onPress: async () => {
+            try {
+              setIsLeaving(true);
+              await leaveVault(vaultId, user.uid);
+              
+              // Clear global state
+              useVaultStore.getState().clearVault();
+              
+              // Reset navigation to prevent back-navigation to non-existent vault
+              navigation.reset({
+                index: 0,
+                routes: [{ name: 'VaultList' }],
+              });
+            } catch (err: any) {
+              Alert.alert("Error", err.message || "Failed to leave vault");
+            } finally {
+              setIsLeaving(false);
+            }
+          }
+        }
+      ]
+    );
   };
 
   return (
@@ -157,51 +202,42 @@ const VaultDetailScreen = () => {
         )}
       </View>
 
-      {loading ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#6C63FF" />
-        </View>
-      ) : (
-        <FlatList
-          data={memories}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.listContent}
-          keyboardShouldPersistTaps="handled"
-          ListEmptyComponent={
+      {/* Memories List */}
+      <FlatList
+        data={memories}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={styles.listContent}
+        keyboardShouldPersistTaps="handled"
+        ListEmptyComponent={
+          loading ? (
+            <LoadingSkeleton />
+          ) : (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>No memories yet.</Text>
               <Text style={styles.emptySubText}>Be the first to share one!</Text>
             </View>
-          }
+          )
+        }
           renderItem={({ item }) => (
-            <View style={styles.memoryItem}>
-              {item.type === 'image' && item.imageURL ? (
-                <View>
-                  <Image
-                    source={{ uri: item.imageURL }}
-                    style={styles.memoryImage}
-                    resizeMode="cover"
-                  />
-                  {item.text ? (
-                    <Text style={styles.memoryText}>{item.text}</Text>
-                  ) : null}
-                </View>
-              ) : (
-                <Text style={styles.memoryText}>{item.text}</Text>
-              )}
-              
-              <Text style={styles.memoryDate}>
-                {(() => {
-                  const date = item.createdAt
-                    ? new Date(item.createdAt.seconds * 1000)
-                    : new Date();
-                  return date.toLocaleDateString();
-                })()}
-              </Text>
-            </View>
+            <MemoryCard 
+              memory={item} 
+              vaultId={vaultId!} 
+            />
           )}
-        />
-      )}
+          ListFooterComponent={
+            <TouchableOpacity 
+              style={[styles.leaveButton, isLeaving && styles.leaveButtonDisabled]} 
+              onPress={handleLeaveVault}
+              disabled={isLeaving}
+            >
+              {isLeaving ? (
+                <ActivityIndicator size="small" color="#FF3B30" />
+              ) : (
+                <Text style={styles.leaveButtonText}>Leave Vault</Text>
+              )}
+            </TouchableOpacity>
+        }
+      />
     </KeyboardAvoidingView>
   );
 };
@@ -345,6 +381,24 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontWeight: '700',
+  },
+  leaveButton: {
+    marginTop: 20,
+    marginBottom: 40,
+    paddingVertical: 15,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#3A3A3C',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 59, 48, 0.05)',
+  },
+  leaveButtonDisabled: {
+    opacity: 0.5,
+  },
+  leaveButtonText: {
+    color: '#FF3B30',
+    fontSize: 16,
+    fontWeight: '600',
   },
 });
 

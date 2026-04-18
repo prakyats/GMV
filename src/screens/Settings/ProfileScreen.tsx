@@ -1,10 +1,13 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { authService } from '../../services/authService';
+import { useVaultStore } from '../../store/vaultStore'; // Added to purge state on logout
 
 const ProfileScreen = () => {
   const handleLogout = async () => {
     try {
+      // Hardened Logout: Purge vault state before auth logout
+      useVaultStore.getState().clearVault();
       await authService.logout();
     } catch (error: any) {
       console.error(error.message);
