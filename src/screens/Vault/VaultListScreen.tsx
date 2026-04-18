@@ -124,6 +124,7 @@ const VaultListScreen = () => {
     // 3. Navigation
     navigation.navigate("VaultDetail", {
       vaultId: vault.id,
+      vaultName: vault.name,
     });
   };
 

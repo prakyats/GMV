@@ -60,7 +60,9 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId }) => {
         
         <View style={styles.footer}>
           <Text style={styles.poster}>
-            {memory.createdBy === user?.uid ? "You" : "Someone"}
+            {memory.createdBy === user?.uid 
+              ? "You" 
+              : (memory.createdByName?.trim() || "Member")}
           </Text>
           <Text style={styles.date}>{dateObj.toDateString()}</Text>
         </View>

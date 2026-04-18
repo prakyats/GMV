@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useRef, useEffect, useState } from 'react';
 import { 
   View, 
   Text, 
@@ -35,16 +35,23 @@ const MemoryDetailScreen = () => {
   const [memory, setMemory] = useState<Memory | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // VIEW TRACKING EFFECT (STRICT)
+  // VIEW TRACKING (ROBUST ID-BASED)
+  const hasMarkedViewed = useRef<string | null>(null);
+
   useEffect(() => {
     if (!memory || !user) return;
+
+    // Prevent duplicate writes for the SAME memory in this focus session
+    if (hasMarkedViewed.current === memory.id) return;
 
     const alreadyViewed = memory.viewedBy?.includes(user.uid);
 
     if (!alreadyViewed) {
       markMemoryViewed(vaultId, memory.id, user.uid);
     }
-  }, [memory, user?.uid]); // Reacts to live updates safely
+
+    hasMarkedViewed.current = memory.id;
+  }, [memory?.id, user?.uid]); // Reacts correctly to late-auth or memory switches
 
   useEffect(() => {
     setLoading(true);
