@@ -3,7 +3,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import VaultStackNavigator from './VaultStackNavigator';
 import OnThisDayScreen from '../screens/Resurface/OnThisDayScreen';
 import ProfileScreen from '../screens/Settings/ProfileScreen';
-import VaultDetailScreen from '../screens/Vault/VaultDetailScreen';
+
 
 import { BottomTabParamList } from './types';
 
