@@ -11,8 +11,9 @@ import {
 } from 'react-native';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { VaultStackParamList } from '../../navigation/types';
-import ReactionBar from '../../components/ReactionBar';
-import { subscribeToMemory, Memory } from '../../services/memoryService';
+import { useAuthStore } from '../../store/authStore';
+import MemoryReactions from '../../components/MemoryReactions';
+import { subscribeToMemory, markMemoryViewed, Memory } from '../../services/memoryService';
 
 type MemoryDetailRouteProp = RouteProp<VaultStackParamList, 'MemoryDetail'>;
 
@@ -30,8 +31,20 @@ const MemoryDetailScreen = () => {
   const navigation = useNavigation();
   const { memoryId, vaultId } = route.params;
 
+  const { user } = useAuthStore();
   const [memory, setMemory] = useState<Memory | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // VIEW TRACKING EFFECT (STRICT)
+  useEffect(() => {
+    if (!memory || !user) return;
+
+    const alreadyViewed = memory.viewedBy?.includes(user.uid);
+
+    if (!alreadyViewed) {
+      markMemoryViewed(vaultId, memory.id, user.uid);
+    }
+  }, [memory, user?.uid]); // Reacts to live updates safely
 
   useEffect(() => {
     setLoading(true);
@@ -113,7 +126,7 @@ const MemoryDetailScreen = () => {
           <Text style={styles.dateText}>{formattedDate}</Text>
 
           {/* REACTION SYSTEM */}
-          <ReactionBar 
+          <MemoryReactions 
             vaultId={vaultId} 
             memoryId={memory.id} 
             reactions={memory.reactions} 

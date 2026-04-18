@@ -9,8 +9,9 @@ import {
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { VaultStackParamList } from '../navigation/types';
+import { useAuthStore } from '../store/authStore';
 import { Memory } from '../services/memoryService';
-import ReactionBar from './ReactionBar';
+import MemoryReactions from './MemoryReactions';
 
 type NavigationProp = NativeStackNavigationProp<VaultStackParamList, 'VaultDetail'>;
 
@@ -26,6 +27,7 @@ interface MemoryCardProps {
  */
 const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId }) => {
   const navigation = useNavigation<NavigationProp>();
+  const { user } = useAuthStore();
 
   const handlePress = () => {
     navigation.navigate('MemoryDetail', { memoryId: memory.id, vaultId });
@@ -57,12 +59,15 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId }) => {
         ) : null}
         
         <View style={styles.footer}>
+          <Text style={styles.poster}>
+            {memory.createdBy === user?.uid ? "You" : "Someone"}
+          </Text>
           <Text style={styles.date}>{dateObj.toDateString()}</Text>
         </View>
 
         {/* REACTION SYSTEM */}
         <View style={styles.reactionContainer}>
-          <ReactionBar 
+          <MemoryReactions 
             vaultId={vaultId} 
             memoryId={memory.id} 
             reactions={memory.reactions}
@@ -106,6 +111,11 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
     fontSize: 12,
     fontWeight: '500',
+  },
+  poster: {
+    color: '#6C63FF',
+    fontSize: 12,
+    fontWeight: '600',
   },
   reactionContainer: {
     marginTop: 4,
