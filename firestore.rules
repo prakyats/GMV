@@ -127,14 +127,24 @@ match /users/{userId} {
         'text',
         'imageURL',
         'createdBy',
+        'createdByName',
         'createdAt',
+        'createdAtClient',
         'memoryDate',
         'viewedBy'
       ])
       && request.resource.data.type in ['text', 'image']
+      && request.resource.data.createdBy is string
       && request.resource.data.createdBy == request.auth.uid
+      && request.resource.data.createdByName is string
+      && request.resource.data.createdByName.size() > 0
+      && request.resource.data.createdByName.size() < 50
       && request.resource.data.createdAt != null
       && request.resource.data.memoryDate != null
+      && (
+          !('createdAtClient' in request.resource.data)
+          || request.resource.data.createdAtClient is number
+        )
       && (
         (
           request.resource.data.type == 'text'
