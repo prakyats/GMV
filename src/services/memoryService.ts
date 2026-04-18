@@ -4,11 +4,14 @@ import {
   query, 
   getDocs, 
   orderBy, 
+  limit,
   serverTimestamp, 
   onSnapshot,
   Timestamp,
   runTransaction,
-  doc
+  doc,
+  updateDoc,
+  arrayUnion
 } from 'firebase/firestore';
 import { db } from './firebase';
 
@@ -21,6 +24,7 @@ export interface Memory {
   createdAt: Timestamp | null;
   memoryDate: Timestamp | null;
   reactions: Record<string, string>; // { userId: emoji }
+  viewedBy: string[]; // List of userIds who viewed this memory
 }
 
 /**
@@ -29,7 +33,7 @@ export interface Memory {
  */
 export async function addMemory(
   vaultId: string, 
-  payload: Omit<Memory, 'id' | 'createdAt'>
+  payload: Omit<Memory, 'id' | 'createdAt' | 'reactions' | 'viewedBy'>
 ) {
   // Defensive validation: Never allow empty text-only memories
   if (payload.type === 'text' && !payload.text.trim()) {
@@ -45,6 +49,7 @@ export async function addMemory(
     createdBy: payload.createdBy,
     createdAt: serverTimestamp(),
     memoryDate: payload.memoryDate ?? serverTimestamp(),
+    viewedBy: [], // Initialize as empty for new memories
   });
 }
 
@@ -86,6 +91,10 @@ function mapMemoryDoc(doc: any): Memory {
       data.reactions && typeof data.reactions === 'object'
         ? data.reactions as Record<string, string>
         : {},
+    
+    viewedBy: Array.isArray(data.viewedBy)
+      ? data.viewedBy
+      : [],
   };
 }
 
@@ -126,17 +135,6 @@ export async function toggleReaction(
   }
 }
 
-/**
- * Fetches all memories for a specific vault, sorted by creation date (newest first).
- */
-export async function getMemories(vaultId: string): Promise<Memory[]> {
-  const memoriesRef = collection(db, 'vaults', vaultId, 'memories');
-  const q = query(memoriesRef, orderBy('createdAt', 'desc'));
-
-  const snapshot = await getDocs(q);
-  
-  return snapshot.docs.map(mapMemoryDoc);
-}
 
 /**
  * Subscribes to real-time updates for memories in a specific vault.
@@ -147,7 +145,16 @@ export function subscribeToMemories(
   onError?: (error: any) => void
 ) {
   const memoriesRef = collection(db, 'vaults', vaultId, 'memories');
-  const q = query(memoriesRef, orderBy('createdAt', 'desc'));
+  
+  // NOTE:
+  // This is basic pagination (limit only).
+  // Does NOT support load-more or infinite scroll.
+  // Future implementation should use startAfter(cursor).
+  const q = query(
+    memoriesRef, 
+    orderBy('memoryDate', 'desc'),
+    limit(15)
+  );
 
   return onSnapshot(q, (snapshot) => {
     const memories = snapshot.docs.map(mapMemoryDoc);
@@ -156,6 +163,29 @@ export function subscribeToMemories(
     console.error("Firestore Subscription Error:", error);
     if (onError) onError(error);
   });
+}
+
+/**
+ * Marks a memory as viewed by a specific user.
+ * FAIL SAFE: Treats view tracking as a non-critical feature.
+ */
+export async function markMemoryViewed(
+  vaultId: string,
+  memoryId: string,
+  userId: string
+) {
+  try {
+    const ref = doc(db, 'vaults', vaultId, 'memories', memoryId);
+
+    await updateDoc(ref, {
+      viewedBy: arrayUnion(userId),
+    });
+  } catch (error) {
+    // Fail silently (non-critical feature)
+    if (__DEV__) {
+      console.log('view tracking failed', error);
+    }
+  }
 }
 
 /**
