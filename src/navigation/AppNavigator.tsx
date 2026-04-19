@@ -11,6 +11,8 @@ import AuthNavigator from './AuthNavigator';
 import MemoryDetailScreen from '../screens/Memory/MemoryDetailScreen';
 import MemoryEntryScreen from '../screens/Public/MemoryEntryScreen';
 import { MainStackParamList } from './types';
+import ThemedAlert from '../components/common/ThemedAlert';
+import ThemedToast from '../components/common/ThemedToast';
 
 const AppTheme = {
   ...DarkTheme,
@@ -78,7 +80,16 @@ const AppNavigator = () => {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
+      if (firebaseUser) {
+        setUser({
+          uid: firebaseUser.uid,
+          displayName: firebaseUser.displayName?.trim() || null,
+          email: firebaseUser.email?.trim() || null,
+          photoURL: firebaseUser.photoURL || null,
+        });
+      } else {
+        setUser(null);
+      }
       setLoading(false);
     });
     return unsubscribe;
@@ -94,9 +105,14 @@ const AppNavigator = () => {
 
   return (
     <SafeAreaProvider>
-      <NavigationContainer theme={AppTheme} linking={linking}>
-        {user ? <MainNavigator /> : <AuthNavigator />}
-      </NavigationContainer>
+      <View style={{ flex: 1 }}>
+        <NavigationContainer theme={AppTheme} linking={linking}>
+          {user ? <MainNavigator /> : <AuthNavigator />}
+        </NavigationContainer>
+
+        <ThemedAlert />
+        <ThemedToast />
+      </View>
     </SafeAreaProvider>
   );
 };
