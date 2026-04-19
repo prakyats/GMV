@@ -8,12 +8,12 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { VaultStackParamList } from '../navigation/types';
+import { VaultStackParamList, MainStackParamList } from '../navigation/types';
 import { useAuthStore } from '../store/authStore';
 import { Memory } from '../services/memoryService';
 import MemoryReactions from './MemoryReactions';
 
-type NavigationProp = NativeStackNavigationProp<VaultStackParamList, 'VaultDetail'>;
+type NavigationProp = NativeStackNavigationProp<MainStackParamList>;
 
 interface MemoryCardProps {
   memory: Memory;
@@ -54,15 +54,15 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId }) => {
       )}
       
       <View style={styles.content}>
-        {memory.text ? (
-          <Text style={styles.text} numberOfLines={3}>{memory.text}</Text>
+        {memory.caption ? (
+          <Text style={styles.text} numberOfLines={3}>{memory.caption}</Text>
         ) : null}
         
         <View style={styles.footer}>
           <Text style={styles.poster}>
-            {memory.createdBy === user?.uid 
+            {memory.createdBy.id === user?.uid 
               ? "You" 
-              : (memory.createdByName?.trim() || "Member")}
+              : (memory.createdBy.name?.trim() || "Member")}
           </Text>
           <Text style={styles.date}>{dateObj.toDateString()}</Text>
         </View>

@@ -4,9 +4,12 @@ import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../services/firebase';
 import { useAuthStore } from '../store/authStore';
-
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import BottomTabNavigator from './BottomTabNavigator';
 import AuthNavigator from './AuthNavigator';
+import MemoryDetailScreen from '../screens/Memory/MemoryDetailScreen';
+import MemoryEntryScreen from '../screens/Public/MemoryEntryScreen';
+import { MainStackParamList } from './types';
 
 const AppTheme = {
   ...DarkTheme,
@@ -20,6 +23,55 @@ const AppTheme = {
   },
 };
 
+const MainStack = createNativeStackNavigator<MainStackParamList>();
+
+const MainNavigator = () => (
+  <MainStack.Navigator
+    screenOptions={{
+      headerShown: false,
+      contentStyle: { backgroundColor: '#0B0B0B' },
+    }}
+  >
+    <MainStack.Screen name="Tabs" component={BottomTabNavigator} />
+    <MainStack.Screen
+      name="MemoryDetail"
+      component={MemoryDetailScreen}
+      options={{ animation: 'fade' }}
+    />
+    {/*
+      MemoryEntry is included in BOTH navigators so deep links work
+      regardless of auth state. When the user IS authenticated,
+      AppNavigator renders MainNavigator which includes MemoryEntry.
+      When the user is NOT authenticated, AppNavigator renders
+      AuthNavigator which also includes MemoryEntry.
+      MemoryEntryScreen reads auth state itself and routes accordingly —
+      authenticated → MemoryDetail (replace), unauthenticated → MemoryPreview (replace).
+    */}
+    <MainStack.Screen name="MemoryEntry" component={MemoryEntryScreen} />
+  </MainStack.Navigator>
+);
+
+/**
+ * Deep link configuration.
+ *
+ * https://gmv.app/memory/:vaultId/:memoryId
+ * → always lands on MemoryEntry, which resolves auth and routes
+ *   to the correct destination without race conditions.
+ *
+ * Both navigators share the MemoryEntry route name so the linking
+ * config works regardless of auth state at link-open time.
+ */
+const linking = {
+  prefixes: ['gmv://', 'https://gmv.app'],
+  config: {
+    screens: {
+      // Authenticated path: MainNavigator → MemoryEntry
+      MemoryEntry: 'memory/:vaultId/:memoryId',
+      // Auth path is handled by AuthNavigator having MemoryEntry too
+    },
+  },
+};
+
 const AppNavigator = () => {
   const { user, loading, setUser, setLoading } = useAuthStore();
 
@@ -28,7 +80,6 @@ const AppNavigator = () => {
       setUser(firebaseUser);
       setLoading(false);
     });
-
     return unsubscribe;
   }, [setUser, setLoading]);
 
@@ -41,8 +92,8 @@ const AppNavigator = () => {
   }
 
   return (
-    <NavigationContainer theme={AppTheme}>
-      {user ? <BottomTabNavigator /> : <AuthNavigator />}
+    <NavigationContainer theme={AppTheme} linking={linking}>
+      {user ? <MainNavigator /> : <AuthNavigator />}
     </NavigationContainer>
   );
 };
@@ -57,4 +108,3 @@ const styles = StyleSheet.create({
 });
 
 export default AppNavigator;
-

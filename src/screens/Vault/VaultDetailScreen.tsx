@@ -12,15 +12,18 @@ import {
   Alert,
   Image,
 } from 'react-native';
-import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
+import { useRoute, useNavigation, RouteProp, CompositeNavigationProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { VaultStackParamList } from '../../navigation/types';
+import { 
+  VaultStackParamList, 
+  MainStackParamList, 
+  Memory 
+} from '../../navigation/types';
 import { useAuthStore } from '../../store/authStore';
 import { useVaultStore } from '../../store/vaultStore';
 import {
   addMemory,
   subscribeToMemories,
-  Memory,
   db,
   mapMemoryDoc,
   mergeAndSort,
@@ -43,11 +46,16 @@ import LoadingSkeleton from '../../components/LoadingSkeleton';
 
 type VaultDetailRouteProp = RouteProp<VaultStackParamList, 'VaultDetail'>;
 
+type VaultDetailNavigationProp = CompositeNavigationProp<
+  NativeStackNavigationProp<VaultStackParamList, 'VaultDetail'>,
+  NativeStackNavigationProp<MainStackParamList>
+>;
+
 const PAGE_SIZE = 15;
 
 const VaultDetailScreen = () => {
   const route = useRoute<VaultDetailRouteProp>();
-  const navigation = useNavigation<NativeStackNavigationProp<VaultStackParamList>>();
+  const navigation = useNavigation<VaultDetailNavigationProp>();
   const { vaultId, vaultName } = route.params || {};
   const { user } = useAuthStore();
 
@@ -61,7 +69,7 @@ const VaultDetailScreen = () => {
   // ─── Post state ───────────────────────────────────────────────────────────
   const [newMemory, setNewMemory] = useState('');
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
-  const [selectedDate] = useState(new Date());
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [isAdding, setIsAdding] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
 
@@ -185,25 +193,53 @@ const VaultDetailScreen = () => {
         imageURL = await uploadImage(compressed, user.uid);
       }
 
-      await addMemory(vaultId, {
-        type: selectedImage ? 'image' : 'text',
-        text,
-        imageURL,
-        createdBy: user.uid,
-        createdByName:
-          user.displayName?.trim() ||
-          (user.email ? user.email.split('@')[0] : null) ||
-          'Member',
-        memoryDate: Timestamp.fromDate(selectedDate),
-      });
+      const { currentVaultMembers } = useVaultStore.getState();
 
-      setNewMemory('');
-      setSelectedImage(null);
+      try {
+        const finalCaption = text.trim();
+        if (!finalCaption) {
+          Alert.alert('Empty Memory', 'Please add a caption before saving.');
+          return;
+        }
+
+        if (finalCaption.length >= 500) {
+          Alert.alert('Too Long', 'Captions must be under 500 characters.');
+          return;
+        }
+
+        const userName = user.displayName?.trim() || (user.email ? user.email.split('@')[0] : '');
+        if (!userName) {
+          Alert.alert('Profile Incomplete', 'Please set a name in your profile before posting memories.');
+          return;
+        }
+
+        await addMemory(vaultId, {
+          type: selectedImage ? 'image' : 'text',
+          caption: finalCaption,
+          imageURL,
+          createdBy: {
+            id: user.uid,
+            name: userName,
+          },
+          memoryDate: Timestamp.fromDate(selectedDate),
+          members: currentVaultMembers,
+        });
+
+        // Cleanup on success
+        setNewMemory('');
+        setSelectedImage(null);
+        setSelectedDate(new Date());
+
+      } catch (addError) {
+        console.error('Memory creation failed:', addError);
+        Alert.alert('Error', 'Could not save memory. Please check your connection and try again.');
+      }
     } catch (err: any) {
       if (err.message === 'IMAGE_TOO_LARGE') {
         Alert.alert('Image too large', 'Try a smaller image (max 5MB after compression).');
       } else {
-        Alert.alert('Error', 'Failed to add memory. Please try again.');
+        // Generic catch-all for potential internal errors (e.g. compression failed)
+        console.error('Add Memory UI error:', err);
       }
     } finally {
       setIsAdding(false);
@@ -311,7 +347,9 @@ const VaultDetailScreen = () => {
             </View>
           )
         }
-        renderItem={({ item }) => <MemoryCard memory={item} vaultId={vaultId!} />}
+        renderItem={({ item }) => (
+          <MemoryCard memory={item} vaultId={vaultId!} />
+        )}
         onMomentumScrollBegin={() => {
           onEndReachedCalledDuringMomentum.current = false;
         }}

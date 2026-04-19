@@ -7,12 +7,13 @@ import {
   ActivityIndicator 
 } from 'react-native';
 import { useAuthStore } from '../store/authStore';
+import { useVaultStore } from '../store/vaultStore';
 import { toggleReaction } from '../services/memoryService';
 
 interface ReactionBarProps {
   vaultId: string;
   memoryId: string;
-  reactions: Record<string, string>; // { userId: emoji }
+  reactions: Record<string, string> | null; // { userId: emoji }
 }
 
 const EMOJIS = ['❤️', '👍', '😂', '😮', '😢'];
@@ -22,9 +23,11 @@ const EMOJIS = ['❤️', '👍', '😂', '😮', '😢'];
  * Renders a horizontal list of emojis with real-time counts.
  * Handles the optimistic UI and transactional logic for toggling reactions.
  */
-const MemoryReactions: React.FC<ReactionBarProps> = ({ vaultId, memoryId, reactions }) => {
+const MemoryReactions: React.FC<ReactionBarProps> = ({ vaultId, memoryId, reactions: rawReactions }) => {
   const { user } = useAuthStore();
   const [loading, setLoading] = useState<string | null>(null);
+
+  const reactions = rawReactions || {};
 
   // Group reactions by emoji type
   const counts = EMOJIS.reduce((acc, emoji) => {
@@ -34,7 +37,6 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({ vaultId, memoryId, reacti
 
   const handleToggle = async (emoji: string) => {
     if (!user) return;
-    
     setLoading(emoji);
     try {
       await toggleReaction(vaultId, memoryId, user.uid, emoji);
