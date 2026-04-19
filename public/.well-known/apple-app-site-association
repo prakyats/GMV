@@ -1,0 +1,11 @@
+{
+  "applinks": {
+    "apps": [],
+    "details": [
+      {
+        "appID": "DEPT_TEAM_ID.com.gmv.app",
+        "paths": ["/memory/*"]
+      }
+    ]
+  }
+}
