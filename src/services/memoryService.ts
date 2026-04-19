@@ -232,7 +232,9 @@ export async function toggleReaction(
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
-    if (!snap.exists()) throw new Error("Memory not found");
+    if (!snap.exists()) {
+      throw new Error("Memory missing during transaction");
+    }
 
     const data = snap.data();
 

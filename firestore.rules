@@ -155,7 +155,11 @@ match /databases/{database}/documents {
       allow update: if request.auth != null
   && isMember(vaultId)
   && (
-    request.writeFields.hasOnly(['reactions'])
+    (
+      request.writeFields.hasOnly(['reactions'])
+      && request.resource.data.reactions is map
+      && request.resource.data.reactions.values().all(v => v is string)
+    )
     ||
     (
       request.writeFields.hasOnly(['viewedBy'])
