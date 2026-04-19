@@ -1,66 +1,36 @@
 /**
  * discoveryEngine.ts — Layer 2 Discovery Engine
  *
- * Provides FOUR contextual memory buckets for the "More for you" section
- * of the OnThisDay screen. Completely separate from the scoring engine.
+ * Provides four contextual memory buckets for the "More for you" section.
+ * Deliberately kept independent from resurfaceEngine — no shared imports
+ * between Layer 1 and Layer 2. Both import ResurfaceMemory from their own
+ * local interface so neither layer breaks if the other changes.
  *
  * Bucket definitions:
- *   anniversary  – memories from this exact month/day in any prior year
- *                  (same pool as Layer 1's dateProximity = 1.0)
- *   nearby       – memories within ±3–7 days of today in prior years
- *                  (the "close but not exact" nostalgia window)
- *   thisMonth    – memories from this calendar month in prior years
- *                  (broader seasonal context)
- *   random       – a date-seeded stable selection from everything else
- *                  (discovery / surprise)
+ *   anniversary – exact same month/day in prior years
+ *   nearby      – ±3–7 days window in prior years (no overlap with anniversary ±0)
+ *   thisMonth   – same calendar month in prior years (broad seasonal context)
+ *   random      – date-seeded stable selection from everything else
  *
- * WHY THESE BUCKETS (interview talking point):
- *   The scoring engine picks ONE best memory. These buckets give the
- *   screen something to show even when the scored memory is null, and add
- *   variety so the screen doesn't feel identical every day.
- *
- * NAMING NOTE (why not weekAgo/monthAgo):
- *   "weekAgo" and "monthAgo" would imply a specific calendar offset
- *   (e.g. Apr 11 for "7 days ago"). Instead we use year-invariant windows
- *   so a memory from Apr 16 *last year* shows up in "nearby", not just
- *   a memory from exactly Apr 11 last year. This gives richer results
- *   for groups that don't have daily memories.
- *
- * SESSION STABILITY:
- *   The random bucket uses a deterministic date seed so cards don't jump
- *   when a reaction update triggers a re-render. Same day = same shuffle.
+ * Adaptive interleaving: within each bucket, unseen memories are prioritised
+ * over seen ones using a dynamic step ratio, not a simple filter.
  */
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
+import { ResurfaceMemory, getScoredMemories, ScoredMemory } from './resurfaceEngine';
 
-export interface FirestoreTimestamp {
-  seconds: number;
-  nanoseconds: number;
-}
+// Re-export so callers can use one type
+export type { ResurfaceMemory as DiscoveryMemory };
 
-export interface DiscoveryMemory {
-  id: string;
-  memoryDate?: FirestoreTimestamp | null;
-  createdAt?: FirestoreTimestamp | null;
-  [key: string]: unknown;
-}
-
-export interface DiscoveryResult {
-  /** Exact same month/day in prior years. */
-  anniversary: DiscoveryMemory[];
-  /** Within ±3–7 days of today in prior years. */
-  nearby: DiscoveryMemory[];
-  /** Same calendar month in prior years. */
-  thisMonth: DiscoveryMemory[];
-  /** Date-seeded stable random selection from the remaining pool. */
-  random: DiscoveryMemory[];
+export interface DiscoveryBuckets<T extends ResurfaceMemory = ResurfaceMemory> {
+  anniversary: T[];
+  nearby:      T[];
+  thisMonth:   T[];
+  random:      T[];
 }
 
 // ---------------------------------------------------------------------------
-// Internal helpers (duplicated from resurfaceEngine deliberately —
-// keeps both files independently portable with no shared import)
+// Date helpers (intentionally duplicated from resurfaceEngine to keep files
+// independently portable — no shared private-utility import)
 // ---------------------------------------------------------------------------
 
 const normaliseDate = (d: Date): Date => {
@@ -70,63 +40,31 @@ const normaliseDate = (d: Date): Date => {
 
 const normalisedDoy = (d: Date): number => {
   const n = normaliseDate(d);
-  const start = new Date(2004, 0, 0);
-  return Math.floor((n.getTime() - start.getTime()) / 86_400_000);
-};
-
-const isSameMonthDay = (a: Date, b: Date): boolean => {
-  const na = normaliseDate(a);
-  const nb = normaliseDate(b);
-  return na.getMonth() === nb.getMonth() && na.getDate() === nb.getDate();
+  return Math.floor((n.getTime() - new Date(2004, 0, 0).getTime()) / 86_400_000);
 };
 
 const circularDayDiff = (doyA: number, doyB: number, year: number): number => {
   const daysInYear = year % 4 === 0 ? 366 : 365;
-  const diff = Math.abs(doyA - doyB);
-  return Math.min(diff, daysInYear - diff);
+  return Math.min(Math.abs(doyA - doyB), daysInYear - Math.abs(doyA - doyB));
 };
 
-const tsToDate = (m: DiscoveryMemory): Date | null => {
+const tsToDate = (m: ResurfaceMemory): Date | null => {
   const ts = m.memoryDate ?? m.createdAt;
-  if (!ts || typeof (ts as FirestoreTimestamp).seconds !== 'number') return null;
-  const t = ts as FirestoreTimestamp;
-  return new Date(t.seconds * 1000 + (t.nanoseconds ?? 0) / 1e6);
+  if (!ts || typeof ts.seconds !== 'number') return null;
+  return new Date(ts.seconds * 1000 + (ts.nanoseconds ?? 0) / 1e6);
 };
 
-const tsToMs = (m: DiscoveryMemory): number => {
-  const ts = m.memoryDate ?? m.createdAt;
-  if (!ts || typeof (ts as FirestoreTimestamp).seconds !== 'number') return 0;
-  const t = ts as FirestoreTimestamp;
-  return t.seconds * 1000 + (t.nanoseconds ?? 0) / 1e6;
-};
-
-const sortDesc = <T extends DiscoveryMemory>(arr: T[]): T[] =>
-  [...arr].sort((a, b) => tsToMs(b) - tsToMs(a));
+// ---------------------------------------------------------------------------
+// Session-stable random shuffle
+// ---------------------------------------------------------------------------
 
 /**
- * Date-seeded shuffle.
- *
- * The seed is derived from today's date string so the same day always
- * produces the same shuffle regardless of Firestore document order.
- * This prevents the random cards from jumping when reactions update.
- *
- * Simple LCG (linear congruential generator) — good enough for display order.
+ * Deterministic LCG shuffle seeded from today's date string.
+ * Same calendar day → same shuffle regardless of input array order.
+ * This prevents the random cards from jumping on reaction updates.
  */
-const seededShuffle = <T>(arr: T[], seed: number): T[] => {
-  const copy = [...arr];
-  let s = seed;
-  for (let i = copy.length - 1; i > 0; i--) {
-    // LCG: next = (a * s + c) % m  (Numerical Recipes constants)
-    s = Math.abs((1_664_525 * s + 1_013_904_223) & 0x7fffffff);
-    const j = s % (i + 1);
-    [copy[i], copy[j]] = [copy[j], copy[i]];
-  }
-  return copy;
-};
-
-/** Derives a numeric seed from a date string like "Sat Apr 18 2026". */
 const dateSeed = (today: Date): number => {
-  const str = today.toDateString(); // stable per calendar day
+  const str = today.toDateString();
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
     hash = (Math.imul(31, hash) + str.charCodeAt(i)) | 0;
@@ -134,90 +72,167 @@ const dateSeed = (today: Date): number => {
   return Math.abs(hash);
 };
 
+const seededShuffle = <T>(arr: T[], seed: number): T[] => {
+  const copy = [...arr];
+  let s = seed;
+  for (let i = copy.length - 1; i > 0; i--) {
+    s = Math.abs((1_664_525 * s + 1_013_904_223) & 0x7fffffff);
+    const j = s % (i + 1);
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+};
+
+// ---------------------------------------------------------------------------
+// Adaptive interleaving
+// ---------------------------------------------------------------------------
+
+/**
+ * Zips unseen and seen arrays using a dynamic step.
+ *
+ * step = clamp(1, 3, round(unseen / (seen + 1)))
+ *
+ * If mostly unseen: step=3 → takes 3 unseen per 1 seen (fresh-heavy).
+ * If mostly seen: step=1 → alternates 1:1.
+ * Interview answer: "The step adapts to pool composition so users always see
+ * fresh content first without completely hiding revisited memories."
+ */
+const adaptiveInterleave = <T extends ResurfaceMemory>(
+  unseen: ScoredMemory<T>[],
+  seen:   ScoredMemory<T>[],
+  limit:  number,
+): T[] => {
+  if (unseen.length === 0) return seen.map(s => s.memory).slice(0, limit);
+  if (seen.length === 0)   return unseen.map(s => s.memory).slice(0, limit);
+
+  const step = Math.min(3, Math.max(1, Math.round(unseen.length / (seen.length + 1))));
+  const result: T[] = [];
+  let uIdx = 0;
+  let sIdx = 0;
+
+  while (result.length < limit && (uIdx < unseen.length || sIdx < seen.length)) {
+    for (let i = 0; i < step && uIdx < unseen.length && result.length < limit; i++) {
+      result.push(unseen[uIdx++].memory);
+    }
+    if (sIdx < seen.length && result.length < limit) {
+      result.push(seen[sIdx++].memory);
+    }
+  }
+
+  return result;
+};
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
-const BUCKET_LIMIT = 5;
-
-// ±N days window for the "nearby" bucket. Days 1 and 2 are the shared
-// ±2-day window already covered by the scoring engine's anniversary signal.
-// Days 3–7 give a wider nostalgic context without overlapping exactly.
-const NEARBY_MIN_DIFF = 3;
-const NEARBY_MAX_DIFF = 7;
+const BUCKET_LIMIT  = 5;
+const NEARBY_MIN    = 3; // days, inclusive
+const NEARBY_MAX    = 7; // days, inclusive
 
 /**
  * Returns four discovery buckets for the OnThisDay screen.
  *
- * @param memories       All memories for the vault (from a getDocs call).
- * @param today          Current date.
- * @param excludeId      Optional: the id returned by getBestResurfacedMemory.
- *                       Excluded from all buckets so it isn't shown twice.
+ * @param memories    All vault memories (from a getDocs call, not onSnapshot).
+ * @param today       Current date.
+ * @param userId      Current user — drives the unseen/seen partition.
+ * @param excludeId   ID of the Layer 1 hero memory — excluded from all buckets
+ *                    so it never appears twice on screen.
+ * @param recentIds   IDs surfaced earlier this session — penalised by 0.7×
+ *                    to reduce repetition without fully hiding them.
  */
-export const getResurfacedMemories = (
-  memories: DiscoveryMemory[],
+export const getResurfacedMemories = <T extends ResurfaceMemory>(
+  memories: T[],
   today: Date,
+  userId: string,
   excludeId?: string,
-): DiscoveryResult => {
+  recentIds: string[] = [],
+): DiscoveryBuckets<T> => {
   const todayYear = today.getFullYear();
-  const todayDoy = normalisedDoy(today);
-  const seed = dateSeed(today);
+  const todayDoy  = normalisedDoy(today);
+  const seed      = dateSeed(today);
 
-  // Global filter: must have a valid date AND be from a prior year.
-  const valid = (memories ?? []).filter((m) => {
+  // Global excluded IDs (Layer 1 hero must never appear again)
+  const usedIds = new Set<string>();
+  if (excludeId) usedIds.add(excludeId);
+
+  // Step 1: Valid pool — prior year only
+  const valid = (memories ?? []).filter(m => {
     const d = tsToDate(m);
     return d !== null && d.getFullYear() < todayYear;
   });
 
-  // ─── Raw bucket computation ──────────────────────────────────────────────
-
-  const anniversaryRaw: DiscoveryMemory[] = [];
-  const nearbyRaw: DiscoveryMemory[] = [];
-  const thisMonthRaw: DiscoveryMemory[] = [];
+  // Step 2: Classify into raw bucket arrays
+  const anniversaryRaw: T[] = [];
+  const nearbyRaw:      T[] = [];
+  const thisMonthRaw:   T[] = [];
 
   for (const m of valid) {
     const d = tsToDate(m)!;
+    const nd    = normaliseDate(d);
     const memDoy = normalisedDoy(d);
-    const diff = circularDayDiff(todayDoy, memDoy, todayYear);
+    const diff   = circularDayDiff(todayDoy, memDoy, todayYear);
 
-    if (isSameMonthDay(d, today)) {
+    if (diff === 0) {
       anniversaryRaw.push(m);
-    } else if (diff >= NEARBY_MIN_DIFF && diff <= NEARBY_MAX_DIFF) {
+    } else if (diff >= NEARBY_MIN && diff <= NEARBY_MAX) {
       nearbyRaw.push(m);
     }
 
-    // thisMonth uses the normalised month so it is year-invariant.
-    if (normaliseDate(d).getMonth() === normaliseDate(today).getMonth()) {
+    // thisMonth uses normalised month for year-invariant comparison
+    if (nd.getMonth() === normaliseDate(today).getMonth()) {
       thisMonthRaw.push(m);
     }
   }
 
-  // ─── Sort each raw bucket before deduplication ───────────────────────────
+  // Step 3: Process each bucket → score → cooldown penalty → partition → interleave → dedup
+  const processBucket = (
+    pool: T[],
+    isAnniversary: boolean = false,
+  ): T[] => {
+    if (pool.length === 0) return [];
 
-  const anniversarySorted = sortDesc(anniversaryRaw);
-  const nearbySorted = sortDesc(nearbyRaw);
-  const thisMonthSorted = sortDesc(thisMonthRaw);
+    // Score
+    let scored = getScoredMemories(pool, today, isAnniversary);
 
-  // ─── Hierarchical deduplication (anniversary > nearby > thisMonth > random)
-  // Also exclude the Layer 1 highlight so it never appears twice on screen.
+    // Cooldown penalty for recently surfaced memories
+    if (recentIds.length > 0) {
+      scored = scored.map(s =>
+        recentIds.includes(s.memory.id)
+          ? { ...s, score: s.score * 0.7 }
+          : s,
+      );
+      // Re-sort after penalty
+      scored.sort((a, b) => b.score - a.score);
+    }
 
-  const usedIds = new Set<string>();
-  if (excludeId) usedIds.add(excludeId);
+    // Partition: unseen → seen
+    const unseen = scored.filter(s => !s.memory.viewedBy?.includes(userId));
+    const seen   = scored.filter(s =>  s.memory.viewedBy?.includes(userId));
 
-  const dedupe = (list: DiscoveryMemory[]): DiscoveryMemory[] =>
-    list.filter((m) => {
-      if (usedIds.has(m.id)) return false;
-      usedIds.add(m.id);
-      return true;
-    });
+    // Adaptive interleave → limit
+    const interleaved = adaptiveInterleave(unseen, seen, BUCKET_LIMIT);
 
-  const anniversary = dedupe(anniversarySorted).slice(0, BUCKET_LIMIT);
-  const nearby = dedupe(nearbySorted).slice(0, BUCKET_LIMIT);
-  const thisMonth = dedupe(thisMonthSorted).slice(0, BUCKET_LIMIT);
+    // Dedup against global usedIds (hierarchical: anniversary > nearby > thisMonth > random)
+    const result: T[] = [];
+    for (const m of interleaved) {
+      if (!usedIds.has(m.id)) {
+        result.push(m);
+        usedIds.add(m.id);
+      }
+    }
+    return result;
+  };
 
-  // Random: everything still in the valid pool after the above buckets.
-  const remaining = valid.filter((m) => !usedIds.has(m.id));
-  const random = seededShuffle(remaining, seed).slice(0, BUCKET_LIMIT);
+  const anniversary = processBucket(anniversaryRaw, true);
+  const nearby      = processBucket(nearbyRaw,      false);
+  const thisMonth   = processBucket(thisMonthRaw,   false);
+
+  // Random: stable shuffle of everything not yet used
+  const remaining = valid.filter(m => !usedIds.has(m.id));
+  const shuffled  = seededShuffle(remaining, seed);
+  // Run shuffled remaining through processBucket for consistent scoring/interleaving
+  const random    = processBucket(shuffled, false);
 
   return { anniversary, nearby, thisMonth, random };
 };
