@@ -1,5 +1,6 @@
 import React, { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../services/firebase';
@@ -15,11 +16,11 @@ const AppTheme = {
   ...DarkTheme,
   colors: {
     ...DarkTheme.colors,
-    background: '#0B0B0B',
-    card: '#1C1C1E',
+    background: '#000000', // True Black for OLED/Premium iOS feel
+    card: '#1C1C1E',      // Standard Apple secondary card background
     text: '#FFFFFF',
-    border: '#2C2C2E',
-    primary: '#6C63FF',
+    border: '#38383A',    // Refined native separator color
+    primary: '#6C63FF',   // Branding primary (Apple-style purple tint)
   },
 };
 
@@ -29,7 +30,7 @@ const MainNavigator = () => (
   <MainStack.Navigator
     screenOptions={{
       headerShown: false,
-      contentStyle: { backgroundColor: '#0B0B0B' },
+      contentStyle: { backgroundColor: '#000000' },
     }}
   >
     <MainStack.Screen name="Tabs" component={BottomTabNavigator} />
@@ -92,9 +93,11 @@ const AppNavigator = () => {
   }
 
   return (
-    <NavigationContainer theme={AppTheme} linking={linking}>
-      {user ? <MainNavigator /> : <AuthNavigator />}
-    </NavigationContainer>
+    <SafeAreaProvider>
+      <NavigationContainer theme={AppTheme} linking={linking}>
+        {user ? <MainNavigator /> : <AuthNavigator />}
+      </NavigationContainer>
+    </SafeAreaProvider>
   );
 };
 

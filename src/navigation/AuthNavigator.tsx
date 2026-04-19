@@ -21,7 +21,7 @@ const AuthNavigator = () => {
     <Stack.Navigator
       screenOptions={{
         headerShown: false,
-        contentStyle: { backgroundColor: '#0B0B0B' },
+        contentStyle: { backgroundColor: '#000000' },
       }}
     >
       <Stack.Screen name="Login" component={LoginScreen} />
