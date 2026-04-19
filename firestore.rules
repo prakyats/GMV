@@ -31,19 +31,25 @@ match /databases/{database}/documents {
         'inviteCode',
         'members',
         'createdBy',
-        'createdAt'
+        'createdAt',
+        'memberProfiles'
       ])
       && request.resource.data.keys().hasOnly([
         'name',
         'inviteCode',
         'members',
         'createdBy',
-        'createdAt'
+        'createdAt',
+        'memberProfiles'
       ])
       && request.resource.data.createdBy == request.auth.uid
       && request.resource.data.members is list
       && request.resource.data.members.size() == 1
-      && request.resource.data.members[0] == request.auth.uid;
+      && request.resource.data.members[0] == request.auth.uid
+      && request.resource.data.memberProfiles is list
+      && request.resource.data.memberProfiles.size() == 1
+      && request.resource.data.memberProfiles[0].id == request.auth.uid
+      && request.resource.data.memberProfiles[0].name is string;
 
     allow list: if request.auth != null && request.query.limit <= 1;
 
@@ -54,9 +60,12 @@ match /databases/{database}/documents {
 
       // SELF JOIN
       (
-        request.resource.data.members.size() == resource.data.members.size() + 1
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberProfiles'])
+        && request.resource.data.members.size() == resource.data.members.size() + 1
         && request.auth.uid in request.resource.data.members
         && !(request.auth.uid in resource.data.members)
+        && request.resource.data.memberProfiles.size() == request.resource.data.members.size()
+        && request.resource.data.memberProfiles is list
       )
 
       ||
@@ -73,9 +82,11 @@ match /databases/{database}/documents {
       // LEAVE
       (
         request.auth.uid in resource.data.members
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['members', 'memberProfiles'])
         && request.resource.data.members.size() == resource.data.members.size() - 1
         && !(request.auth.uid in request.resource.data.members)
+        && request.resource.data.memberProfiles.size() == request.resource.data.members.size()
+        && request.resource.data.memberProfiles is list
       )
     );
 
@@ -122,7 +133,7 @@ match /databases/{database}/documents {
 
         // CAPTION
         && request.resource.data.caption is string
-        && request.resource.data.caption.size() > 0
+        && (request.resource.data.type == 'image' || request.resource.data.caption.size() > 0)
         && request.resource.data.caption.size() < 500
 
         // IMAGE / TEXT VALIDATION
@@ -156,9 +167,12 @@ match /databases/{database}/documents {
   && isMember(vaultId)
   && (
     (
-      request.writeFields.hasOnly(['reactions'])
+      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
       && request.resource.data.reactions is map
-      && request.resource.data.reactions.values().all(v => v is string)
+      && (
+  request.resource.data.reactions is map
+  && request.resource.data.reactions.size() >= 0
+)
     )
     ||
     (

@@ -70,7 +70,7 @@ const memories: DiscoveryMemory[] = [
 
 console.log('\n── Discovery Engine – Manual Test Suite ────────────────────────────\n');
 
-const result = getResurfacedMemories(memories, today);
+const result = getResurfacedMemories(memories, today, 'test_user');
 
 // TEST 1 — Current year is always excluded from all buckets
 {
@@ -146,7 +146,7 @@ const result = getResurfacedMemories(memories, today);
 
 // TEST 8 — excludeId removes Layer 1 highlight from all buckets
 {
-  const resultWithExclude = getResurfacedMemories(memories, today, 'anniv_2024');
+  const resultWithExclude = getResurfacedMemories(memories, today, 'test_user', 'anniv_2024');
   const allIds = [
     ...resultWithExclude.anniversary,
     ...resultWithExclude.nearby,
@@ -161,8 +161,8 @@ const result = getResurfacedMemories(memories, today);
 
 // TEST 9 — Session stability: same call, same day → same random order
 {
-  const r1 = getResurfacedMemories(memories, today);
-  const r2 = getResurfacedMemories(memories, today);
+  const r1 = getResurfacedMemories(memories, today, 'test_user');
+  const r2 = getResurfacedMemories(memories, today, 'test_user');
   const ids1 = r1.random.map((m) => m.id).join(',');
   const ids2 = r2.random.map((m) => m.id).join(',');
   check('T9  Random bucket is stable across calls on same day',

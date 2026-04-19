@@ -21,6 +21,8 @@ import { useAuthStore } from '../../store/authStore';
 import { markMemoryViewed, subscribeToMemory } from '../../services/memoryService';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
+import { ScalePressable } from '../../components';
+import { triggerHaptic } from '../../utils/haptics';
 import MemoryReactions from '../../components/MemoryReactions';
 
 type MemoryDetailRouteProp = RouteProp<MainStackParamList, 'MemoryDetail'>;
@@ -41,15 +43,38 @@ const MemoryDetailScreen = () => {
   const [error, setError] = useState(false);
   const [openPicker, setOpenPicker] = useState(false);
   const [touchPos, setTouchPos] = useState({ x: 0, y: 0 });
+  const [hasAnimated, setHasAnimated] = useState(false);
+  const [isSharing, setIsSharing] = useState(false);
 
-  const fadeAnim = useRef(new Animated.Value(0)).current;
+  // Sequenced animation values
+  const imageFade = useRef(new Animated.Value(0)).current;
+  const contentFade = useRef(new Animated.Value(0)).current;
+  const reactionsFade = useRef(new Animated.Value(0)).current;
 
   // 0. RESET ON ID CHANGE
   useEffect(() => {
     setMemory(null);
     setError(false);
     setLoading(true);
+    setHasAnimated(false);
+    imageFade.setValue(0);
+    contentFade.setValue(0);
+    reactionsFade.setValue(0);
   }, [memoryId]);
+
+  // --- DERIVED RENDER DATA (MOVED TO TOP TO FIX SCOPE ERROR) ---
+  const hasImage = !!memory?.imageURL;
+  const displayText = memory?.caption || "";
+  const dateObj = (memory?.memoryDate || memory?.createdAt)
+    ? new Date((memory?.memoryDate?.seconds || memory?.createdAt?.seconds || 0) * 1000)
+    : new Date();
+
+  const formattedDate = dateObj.toLocaleDateString('en-US', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric'
+  });
 
   // 1. REAL-TIME SUBSCRIPTION
   useEffect(() => {
@@ -69,17 +94,56 @@ const MemoryDetailScreen = () => {
     return () => unsubscribe();
   }, [memoryId, vaultId]);
 
-  // 2. FADE ANIMATION
+  // 1.5 NATIVE HEADER CONFIG (MUST BE BEFORE EARLY RETURNS)
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerShown: true,
+      headerTransparent: !hasImage,
+      headerStyle: hasImage ? { backgroundColor: '#000000', elevation: 0, shadowOpacity: 0 } : undefined,
+      headerTitle: '',
+      headerTintColor: '#FFFFFF',
+      headerRight: () => (
+        hasImage ? (
+          <ScalePressable 
+            onPress={handleShare} 
+            disabled={isSharing}
+            hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
+            style={{ opacity: isSharing ? 0.5 : 1, padding: 8, marginRight: 8 }}
+          >
+            <Ionicons name="share-outline" size={22} color="#FFFFFF" />
+          </ScalePressable>
+        ) : null
+      ),
+    });
+  }, [navigation, hasImage, isSharing]);
+
+  // 2. CONTROLLED SEQUENCING
   useEffect(() => {
-    if (memory) {
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 250,
-        easing: Easing.out(Easing.ease),
-        useNativeDriver: true,
-      }).start();
+    if (memory && !hasAnimated) {
+      Animated.sequence([
+        // 1. Image fades in first
+        Animated.timing(imageFade, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        // 2. Metadata fades in after 100ms
+        Animated.delay(100),
+        Animated.timing(contentFade, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+        // 3. Reactions fade in after 150ms
+        Animated.delay(150),
+        Animated.timing(reactionsFade, {
+          toValue: 1,
+          duration: 300,
+          useNativeDriver: true,
+        }),
+      ]).start(() => setHasAnimated(true));
     }
-  }, [fadeAnim, memory]);
+  }, [memory, hasAnimated]);
 
   // 3. MARK VIEWED
   useFocusEffect(
@@ -91,23 +155,30 @@ const MemoryDetailScreen = () => {
 
   // 4. HANDLERS
   const handleShare = async () => {
-    try {
-      if (!memory?.imageURL) return;
-      const rawFilename = memory.imageURL.split('/').pop()?.split('?')[0] || 'shared-image.jpg';
-      const filename = decodeURIComponent(rawFilename);
-      const fileUri = FileSystem.cacheDirectory + filename;
-      const folderPath = fileUri.substring(0, fileUri.lastIndexOf('/'));
-      
-      try {
-        await FileSystem.makeDirectoryAsync(folderPath, { intermediates: true });
-      } catch (e) {}
+    if (isSharing || !memory?.imageURL) return;
 
-      const download = await FileSystem.downloadAsync(memory.imageURL, fileUri);
+    try {
+      setIsSharing(true);
+      triggerHaptic('light');
+
+      // RESTORE ORIGINAL FILENAME RESOLUTION LOGIC (ZERO IMPROVEMENTS)
+      const rawFilename = memory.imageURL.split('/').pop()?.split('?')[0] || 'shared-image.jpg';
+      const filename = decodeURIComponent(rawFilename).split('/').pop() || 'shared-image.jpg';
+      const fileUri = FileSystem.cacheDirectory + filename;
+
+      const downloaded = await FileSystem.downloadAsync(
+        memory.imageURL,
+        fileUri
+      );
+
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(download.uri);
+        await Sharing.shareAsync(downloaded.uri);
       }
+
     } catch (e) {
-      console.log('Share error:', e);
+      console.warn('Share failed', e);
+    } finally {
+      setIsSharing(false);
     }
   };
 
@@ -131,25 +202,9 @@ const MemoryDetailScreen = () => {
     );
   }
 
-  // --- DERIVED RENDER DATA ---
-  const displayText = memory.caption || "";
-  const hasImage = !!memory.imageURL;
-  const isImageMemory = hasImage;
-  
-  const dateObj = memory.memoryDate 
-    ? new Date(memory.memoryDate.seconds * 1000)
-    : memory.createdAt 
-      ? new Date(memory.createdAt.seconds * 1000)
-      : new Date();
+  // 3. MARK VIEWED (MOVED AFTER EARLY RETURNS)
 
-  const formattedDate = dateObj.toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric'
-  });
-
-  const ContentWrapper = ({ children }: { children: React.ReactNode }) => (
+  const ContentWrapper = ({ children, style }: { children: React.ReactNode; style?: any }) => (
     <TouchableOpacity
       activeOpacity={1}
       onLongPress={(e) => {
@@ -158,77 +213,40 @@ const MemoryDetailScreen = () => {
         setOpenPicker(true);
       }}
       delayLongPress={250}
-      style={{ flex: 1 }}
+      style={[{ flex: 1 }, style]}
     >
       {children}
     </TouchableOpacity>
   );
 
   return (
-    <SafeAreaView style={styles.safeArea}>
-      <StatusBar barStyle="light-content" backgroundColor="#000" />
+    <View style={styles.safeArea}>
+      <StatusBar 
+        backgroundColor={hasImage ? "#000000" : "transparent"} 
+        translucent={!hasImage}
+        barStyle="light-content" 
+      />
       
-      <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
-        {/* HEADER */}
-        <View style={styles.header}>
-          <Pressable 
-            onPress={() => navigation.goBack()}
-            style={({ pressed }) => [
-              styles.backButton,
-              { opacity: pressed ? 0.6 : 1 }
-            ]}
-          >
-            <Text style={styles.backText}>← Back</Text>
-          </Pressable>
-
-          {isImageMemory && (
-            <TouchableOpacity 
-              onPress={handleShare}
-              style={styles.headerShareButton}
-              activeOpacity={0.7}
+      {hasImage ? (
+        <View style={styles.imageLayout} pointerEvents="box-none">
+          <ContentWrapper>
+            <Animated.View style={[styles.imageContainer, { height: screenHeight * 0.65, opacity: imageFade }]}>
+              <Image 
+                source={{ uri: memory.imageURL! }} 
+                style={styles.image}
+                resizeMode="cover"
+              />
+            </Animated.View>
+            
+            <LinearGradient
+              colors={['transparent', 'rgba(0,0,0,0.8)', 'rgba(0,0,0,1)']}
+              style={styles.bottomOverlay}
             >
-              <Ionicons name="share-outline" size={24} color="white" />
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <ContentWrapper>
-          {hasImage ? (
-            <View style={styles.imageLayout}>
-              <View style={[styles.imageContainer, { height: screenHeight * 0.6 }]}>
-                <Image 
-                  source={{ uri: memory.imageURL! }} 
-                  style={styles.image}
-                  resizeMode="cover"
-                />
-              </View>
-              
-              <LinearGradient
-                colors={['transparent', 'rgba(0,0,0,0.9)']}
-                style={styles.bottomOverlay}
-              >
-                <View style={styles.imageContent}>
-                  <Text style={styles.imageCaptionText}>{displayText}</Text>
-                  <Text style={styles.imageDateText}>{formattedDate}</Text>
-                  <View style={styles.reactionWrapper}>
-                    <MemoryReactions 
-                      vaultId={vaultId}
-                      memoryId={memoryId}
-                      reactions={memory.reactions}
-                      openPicker={openPicker}
-                      onClosePicker={() => setOpenPicker(false)}
-                      touchPosition={touchPos}
-                    />
-                  </View>
-                </View>
-              </LinearGradient>
-            </View>
-          ) : (
-            <View style={styles.centeredLayout}>
-              <View style={styles.textHeroContainer}>
-                <Text style={styles.heroText}>{displayText}</Text>
-                <Text style={styles.heroDate}>{formattedDate}</Text>
-                <View style={styles.reactionWrapperHero}>
+              <Animated.View style={[styles.imageContent, { opacity: contentFade }]}>
+                <Text style={styles.imageCaptionText}>{displayText}</Text>
+                <Text style={styles.imageDateText}>{formattedDate}</Text>
+                
+                <Animated.View style={[styles.reactionWrapper, { opacity: reactionsFade }]}>
                   <MemoryReactions 
                     vaultId={vaultId}
                     memoryId={memoryId}
@@ -237,41 +255,47 @@ const MemoryDetailScreen = () => {
                     onClosePicker={() => setOpenPicker(false)}
                     touchPosition={touchPos}
                   />
-                </View>
-              </View>
-            </View>
-          )}
+                </Animated.View>
+              </Animated.View>
+            </LinearGradient>
+          </ContentWrapper>
+        </View>
+      ) : (
+        <ContentWrapper>
+          <View style={styles.centeredLayout}>
+            <Animated.View style={[styles.textHeroContainer, { opacity: contentFade }]}>
+              <Text style={styles.heroText}>{displayText}</Text>
+              <Text style={styles.heroDate}>{formattedDate}</Text>
+
+              <Animated.View style={[styles.reactionWrapperHero, { opacity: reactionsFade }]}>
+                <MemoryReactions 
+                  vaultId={vaultId}
+                  memoryId={memoryId}
+                  reactions={memory.reactions}
+                  openPicker={openPicker}
+                  onClosePicker={() => setOpenPicker(false)}
+                  touchPosition={touchPos}
+                />
+              </Animated.View>
+            </Animated.View>
+          </View>
         </ContentWrapper>
-      </Animated.View>
-    </SafeAreaView>
+      )}
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
   },
   container: {
     flex: 1,
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingRight: 16,
-    zIndex: 10,
-  },
-  backButton: {
-    padding: 12,
-  },
   headerShareButton: {
+    marginRight: 12,
     padding: 8,
-  },
-  backText: {
-    color: '#6C63FF',
-    fontSize: 16,
-    fontWeight: '600',
   },
   imageLayout: {
     flex: 1,
@@ -288,78 +312,81 @@ const styles = StyleSheet.create({
     bottom: 0,
     left: 0,
     right: 0,
-    paddingTop: 80,
+    paddingTop: 100,
     paddingBottom: 60,
-    paddingHorizontal: 24,
+    paddingHorizontal: 20,
   },
   imageContent: {
     width: '100%',
   },
   imageCaptionText: {
     color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '600',
-    lineHeight: 32,
+    fontSize: 22,
+    fontWeight: '700',
+    lineHeight: 30,
     marginBottom: 8,
   },
   imageDateText: {
-    color: '#888888',
+    color: '#8E8E93',
     fontSize: 14,
-    marginTop: 6,
+    fontWeight: '400',
   },
   reactionWrapper: {
-    marginTop: 12,
+    marginTop: 16,
   },
   centeredLayout: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
+    backgroundColor: '#000000',
   },
   textHeroContainer: {
     width: '100%',
     alignItems: 'center',
-    maxWidth: 340, 
+    maxWidth: 400, 
   },
   heroText: {
     color: '#FFFFFF',
-    fontSize: 28,
-    fontWeight: '600',
+    fontSize: 32,
+    fontWeight: '800',
     textAlign: 'center',
-    lineHeight: 38,
+    lineHeight: 44,
   },
   heroDate: {
-    color: '#888888',
-    marginTop: 16,
-    fontSize: 14,
+    color: '#8E8E93',
+    marginTop: 20,
+    fontSize: 15,
     textAlign: 'center',
     marginBottom: 8,
   },
   reactionWrapperHero: {
-    marginTop: 24,
+    marginTop: 32,
   },
   centered: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    backgroundColor: '#000000',
   },
   errorText: {
-    color: '#8E8E93',
+    color: '#FF453A',
     fontSize: 16,
     textAlign: 'center',
-    marginBottom: 20,
+    marginBottom: 24,
   },
   retryButton: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(108, 99, 255, 0.15)',
-    borderRadius: 8,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    backgroundColor: '#1C1C1E',
+    borderRadius: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#38383A',
   },
   retryText: {
     color: '#6C63FF',
     fontWeight: '600',
-    fontSize: 14,
+    fontSize: 15,
   },
 });
 

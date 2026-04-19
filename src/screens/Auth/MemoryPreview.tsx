@@ -115,17 +115,17 @@ const MemoryPreview = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0B0B0B',
+    backgroundColor: '#000000',
   },
   loadingContainer: {
     flex: 1,
-    backgroundColor: '#0B0B0B',
+    backgroundColor: '#000000',
     justifyContent: 'center',
     alignItems: 'center',
   },
   errorContainer: {
     flex: 1,
-    backgroundColor: '#0B0B0B',
+    backgroundColor: '#000000',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 40,
@@ -160,15 +160,15 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    height: '50%',
+    height: '60%',
   },
   floatingContent: {
-    padding: 30,
+    padding: 24,
     zIndex: 10,
   },
   vaultBadge: {
     color: '#6C63FF',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '800',
     letterSpacing: 2,
     marginBottom: 12,
@@ -176,8 +176,8 @@ const styles = StyleSheet.create({
   caption: {
     color: '#FFFFFF',
     fontSize: 32,
-    fontWeight: '700',
-    lineHeight: 44,
+    fontWeight: '800',
+    lineHeight: 42,
   },
   socialProof: {
     color: '#8E8E93',
@@ -186,7 +186,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   footer: {
-    padding: 30,
+    padding: 24,
     flex: 1,
     justifyContent: 'center',
   },
@@ -197,9 +197,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: "#6C63FF",
-    shadowOpacity: 0.4,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 6 },
   },
   buttonText: {
     color: '#FFFFFF',
@@ -207,12 +207,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   secondaryAction: {
-    marginTop: 20,
+    marginTop: 24,
     alignItems: 'center',
   },
   secondaryText: {
     color: '#8E8E93',
-    fontSize: 14,
+    fontSize: 15,
     fontWeight: '500',
     textDecorationLine: 'underline',
   },
