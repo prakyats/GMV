@@ -13,6 +13,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { ScalePressable } from './common/ScalePressable';
 import { triggerHaptic } from '../utils/haptics';
 import { ANIMATION } from '../constants/theme';
+import { useUIStore } from '../store/uiStore';
 
 interface ImagePickerButtonProps {
   onImageSelected: (uri: string) => void;
@@ -48,10 +49,11 @@ const ImagePickerButton: React.FC<ImagePickerButtonProps> = ({
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
     if (!permission.granted) {
-      Alert.alert(
-        "Permission Required", 
-        "Please allow access to your photos to share memories."
-      );
+      useUIStore.getState().showAlert({
+        title: "Permission Required",
+        message: "Please allow access to your photos to share memories.",
+        type: "info"
+      });
       return;
     }
 
@@ -82,7 +84,11 @@ const ImagePickerButton: React.FC<ImagePickerButtonProps> = ({
     } catch (error) {
       cleanup();
       console.error("ImagePicker Error:", error);
-      Alert.alert("Error", "Failed to pick an image.");
+      useUIStore.getState().showAlert({
+        title: "Error",
+        message: "Failed to pick an image.",
+        type: "error"
+      });
     }
   };
 

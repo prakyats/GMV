@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 const OnThisDayScreen = () => {
   const navigation = useNavigation<NativeStackNavigationProp<MainStackParamList>>();
-  const { user } = useAuthStore();
+  const { user, isDeletingAccount } = useAuthStore();
 
   const [memories, setMemories] = useState<(Memory & { vaultId: string })[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,10 +30,11 @@ const OnThisDayScreen = () => {
 
   // ── Fetch memories from Firestore (Global Mode) ──────────────────────────
   const fetchMemories = useCallback(async () => {
+    if (!user?.uid || isDeletingAccount) return;
     try {
-      if (!user?.uid) return;
       setLoading(true);
       const data = await getAllUserMemories(user.uid);
+      if (isDeletingAccount) return;
       setMemories(data);
     } catch (err) {
       console.error('Failed to fetch global memories for OnThisDay:', err);
@@ -48,8 +49,9 @@ const OnThisDayScreen = () => {
 
   // ── Engagement sync ───────────────────────────────────────────────────────
   useEffect(() => {
-    if (!user) return;
+    if (!user || isDeletingAccount) return;
     syncEngagementStats(user.uid).then(res => {
+      if (isDeletingAccount) return;
       if (res) {
         setStats(res as EngagementStats);
         // isNewDay is true only if the streak was actually incremented today
@@ -57,7 +59,7 @@ const OnThisDayScreen = () => {
         setIsNewDay(res.isNewDay === true);
       }
     });
-  }, [user?.uid]);
+  }, [user?.uid, isDeletingAccount]);
 
   // ── Engine integration ───────────────────────────────────────────────────
   const today  = new Date();
