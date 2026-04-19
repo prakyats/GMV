@@ -186,7 +186,8 @@ match /databases/{database}/documents {
     )
   );
 
-      allow delete: if false;
+      allow delete: if request.auth != null 
+        && resource.data.createdBy.id == request.auth.uid;
     }
   }
 
