@@ -11,9 +11,21 @@ import {
   Platform,
   Alert,
   Image,
+  Pressable,
+  Modal,
+  ScrollView,
+  Animated,
+  BackHandler,
+  InteractionManager,
+  StatusBar,
+  Easing,
 } from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, CompositeNavigationProp } from '@react-navigation/native';
+import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Ionicons } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
 import { 
   VaultStackParamList, 
   MainStackParamList, 
@@ -28,7 +40,7 @@ import {
   mapMemoryDoc,
   mergeAndSort,
 } from '../../services/memoryService';
-import { leaveVault } from '../../services/vaultService';
+import { leaveVault, fetchVaultDetails } from '../../services/vaultService';
 import {
   Timestamp,
   collection,
@@ -38,11 +50,14 @@ import {
   startAfter,
   limit,
 } from 'firebase/firestore';
-import ImagePickerButton from '../../components/ImagePickerButton';
-import MemoryCard from '../../components/MemoryCard';
+import { ImagePickerButton, MemoryCard, ScalePressable } from '../../components';
 import { compressImage } from '../../utils/imageCompressor';
 import { uploadImage } from '../../services/storage';
 import LoadingSkeleton from '../../components/LoadingSkeleton';
+import { ANIMATION } from '../../constants/theme';
+import { triggerHaptic } from '../../utils/haptics';
+import { VaultMember } from '../../navigation/types';
+import MemberAvatarStrip from '../../components/common/MemberAvatarStrip';
 
 type VaultDetailRouteProp = RouteProp<VaultStackParamList, 'VaultDetail'>;
 
@@ -58,6 +73,11 @@ const VaultDetailScreen = () => {
   const navigation = useNavigation<VaultDetailNavigationProp>();
   const { vaultId, vaultName } = route.params || {};
   const { user } = useAuthStore();
+  const tabBarHeight = useBottomTabBarHeight();
+
+  // ─── Member state ─────────────────────────────────────────────────────────
+  const [memberProfiles, setMemberProfiles] = useState<VaultMember[]>([]);
+  const [vaultCreatedBy, setVaultCreatedBy] = useState<string>('');
 
   // ─── Feed state ───────────────────────────────────────────────────────────
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -71,7 +91,70 @@ const VaultDetailScreen = () => {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [isAdding, setIsAdding] = useState(false);
+  const [isModalVisible, setIsModalVisible] = useState(false);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  
+  // ─── Animation Refs ────────────────────────────────────────────────────────
+  const sheetAnim = useRef(new Animated.Value(0)).current;
+  const isAnimating = useRef(false);
+  const showSettingsRef = useRef(false);
+  
+  const insets = useSafeAreaInsets();
+  
+  // Sync ref for BackHandler
+  useEffect(() => {
+    showSettingsRef.current = showSettings;
+  }, [showSettings]);
+
+  // ─── Hardware Back Button (Android) ────────────────────────────────────────
+  useEffect(() => {
+    const onBackPress = () => {
+      if (showSettingsRef.current) {
+        closeSettings();
+        return true; // intercept
+      }
+      return false;
+    };
+
+    const subscription = BackHandler.addEventListener(
+      'hardwareBackPress',
+      onBackPress
+    );
+
+    return () => subscription.remove();
+  }, []);
+
+  // ─── Animation state ──────────────────────────────────────────────────────
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const fabScale = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    // Screen Fade-in + FAB Scale-in
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: ANIMATION.FADE_DURATION,
+      useNativeDriver: true,
+    }).start();
+
+    Animated.spring(fabScale, {
+      toValue: 1,
+      friction: 8,
+      tension: 40,
+      delay: 300,
+      useNativeDriver: true,
+    }).start();
+
+    // Fetch vault member details
+    if (vaultId) {
+      fetchVaultDetails(vaultId)
+        .then(({ memberProfiles: profiles, createdBy }) => {
+          setMemberProfiles(profiles);
+          setVaultCreatedBy(createdBy);
+        })
+        .catch(() => {}); // Non-critical — strip just stays empty
+    }
+  }, [fadeAnim, fabScale, vaultId]);
 
   /**
    * Pagination cursor architecture (two separate refs):
@@ -177,6 +260,14 @@ const VaultDetailScreen = () => {
     }
   };
 
+  const handleCloseModal = () => {
+    setIsModalVisible(false);
+    setNewMemory('');
+    setSelectedImage(null);
+    setSelectedDate(new Date());
+    setError(null);
+  };
+
   // ─── Post memory ──────────────────────────────────────────────────────────
   const handleAddMemory = async () => {
     if (isAdding || !vaultId || !user?.uid) return;
@@ -197,8 +288,8 @@ const VaultDetailScreen = () => {
 
       try {
         const finalCaption = text.trim();
-        if (!finalCaption) {
-          Alert.alert('Empty Memory', 'Please add a caption before saving.');
+        if (!finalCaption && !imageURL) {
+          Alert.alert('Empty Memory', 'Please add a caption or a photo before saving.');
           return;
         }
 
@@ -229,6 +320,8 @@ const VaultDetailScreen = () => {
         setNewMemory('');
         setSelectedImage(null);
         setSelectedDate(new Date());
+        setIsModalVisible(false);
+        triggerHaptic('success');
 
       } catch (addError) {
         console.error('Memory creation failed:', addError);
@@ -247,99 +340,144 @@ const VaultDetailScreen = () => {
   };
 
   // ─── Leave vault ──────────────────────────────────────────────────────────
-  const handleLeaveVault = () => {
-    if (isLeaving || !vaultId || !user?.uid) return;
-
-    Alert.alert(
-      'Leave Vault',
-      'Are you sure? If you are the last member, the vault and all its memories will be permanently deleted.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Leave',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              setIsLeaving(true);
-              await leaveVault(vaultId, user.uid);
-              useVaultStore.getState().clearVault();
-              navigation.reset({ index: 0, routes: [{ name: 'VaultList' }] });
-            } catch (err: any) {
-              Alert.alert('Error', err.message || 'Failed to leave vault');
-            } finally {
-              setIsLeaving(false);
-            }
-          },
-        },
-      ]
-    );
+  // ─── Settings Actions ────────────────────────────────────────────────────
+  const openSettings = () => {
+    if (isAnimating.current || showSettings) return;
+    
+    isAnimating.current = true;
+    triggerHaptic('light');
+    setShowSettings(true);
+    sheetAnim.setValue(0);
+    
+    requestAnimationFrame(() => {
+      Animated.timing(sheetAnim, {
+        toValue: 1,
+        duration: 250,
+        useNativeDriver: true,
+      }).start(() => {
+        isAnimating.current = false;
+      });
+    });
   };
+
+  const closeSettings = (onComplete?: () => void) => {
+    if (isAnimating.current) return;
+    
+    isAnimating.current = true;
+    Animated.timing(sheetAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => {
+      isAnimating.current = false;
+      setShowSettings(false);
+      onComplete?.();
+    });
+  };
+
+  const handleLeavePress = () => {
+    if (isLeaving) return;
+    triggerHaptic('medium');
+    
+    closeSettings(() => {
+      Alert.alert(
+        "Leave Vault?",
+        "You will lose access to all memories in this vault.",
+        [
+          { text: "Cancel", style: "cancel" },
+          { 
+            text: "Leave", 
+            style: "destructive", 
+            onPress: confirmLeave 
+          },
+        ]
+      );
+    });
+  };
+
+  const confirmLeave = async () => {
+    if (isLeaving) return;
+    
+    try {
+      setIsLeaving(true);
+      await leaveVault(vaultId!, user!.uid);
+      
+      // Force modal unmount before navigation
+      setShowSettings(false);
+      
+      requestAnimationFrame(() => {
+        InteractionManager.runAfterInteractions(() => {
+          navigation.goBack();
+        });
+      });
+    } catch (error: any) {
+      console.warn('LEAVE VAULT ERROR:', error.code, error.message);
+      Alert.alert(
+        "Something went wrong",
+        "Couldn't leave the vault. Please try again."
+      );
+    } finally {
+      setIsLeaving(false);
+    }
+  };
+
+  const handleBackdropPress = () => {
+    if (!showSettings || isAnimating.current) return;
+    closeSettings();
+  };
+
+  // ─── Native Header Config ──────────────────────────────────────────────
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      title: vaultName || 'Vault',
+      headerRight: () => (
+        <ScalePressable 
+          onPress={openSettings}
+          useOpacity={true}
+          disabled={isLeaving}
+        >
+          <Ionicons 
+            name="settings-outline" 
+            size={22} 
+            color={showSettings ? "#FFFFFF" : "#B0B0B0"} 
+          />
+        </ScalePressable>
+      ),
+    });
+  }, [navigation, vaultName, showSettings, isLeaving]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backContainer}>
-          <Text style={styles.backButton}>← Back</Text>
-        </TouchableOpacity>
-        <Text style={styles.title} numberOfLines={1}>{vaultName || 'Vault'}</Text>
-      </View>
-
-      {/* Post input */}
-      <View style={styles.inputContainer}>
-        <View style={styles.inputRow}>
-          <ImagePickerButton onImageSelected={setSelectedImage} />
-          <TextInput
-            style={styles.input}
-            placeholder={selectedImage ? 'Add a caption...' : 'Write a memory...'}
-            placeholderTextColor="#8E8E93"
-            value={newMemory}
-            onChangeText={setNewMemory}
-            multiline
-          />
-          <TouchableOpacity
-            style={[
-              styles.addButton,
-              ((!newMemory.trim() && !selectedImage) || isAdding) && styles.addButtonDisabled,
-            ]}
-            onPress={handleAddMemory}
-            disabled={(!newMemory.trim() && !selectedImage) || isAdding}
-          >
-            {isAdding ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <Text style={styles.addButtonText}>Add</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {selectedImage && (
-          <View style={styles.previewContainer}>
-            <Image source={{ uri: selectedImage }} style={styles.previewImage} />
-            <TouchableOpacity style={styles.removeImageButton} onPress={() => setSelectedImage(null)}>
-              <Text style={styles.removeImageText}>✕</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-      </View>
-
-      {/* Feed */}
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
       <FlatList
         data={memories}
         keyExtractor={(item) => item.id}
         contentContainerStyle={styles.listContent}
         keyboardShouldPersistTaps="handled"
+        contentInsetAdjustmentBehavior="automatic"
+        ListHeaderComponent={
+          memberProfiles.length > 0 ? (
+            <MemberAvatarStrip
+              memberProfiles={memberProfiles}
+              createdBy={vaultCreatedBy}
+              currentUserId={user?.uid || ''}
+              onPress={() =>
+                navigation.navigate('VaultMembers', {
+                  vaultId: vaultId!,
+                  vaultName: vaultName || 'Vault',
+                  createdBy: vaultCreatedBy,
+                })
+              }
+            />
+          ) : null
+        }
         ListEmptyComponent={
           loading ? (
-            <>
+            <View style={{ marginTop: 20 }}>
               <LoadingSkeleton />
               <LoadingSkeleton />
               <LoadingSkeleton />
-            </>
+            </View>
           ) : (
             <View style={styles.emptyContainer}>
               <Text style={styles.emptyText}>No memories yet.</Text>
@@ -347,8 +485,8 @@ const VaultDetailScreen = () => {
             </View>
           )
         }
-        renderItem={({ item }) => (
-          <MemoryCard memory={item} vaultId={vaultId!} />
+        renderItem={({ item, index }) => (
+          <MemoryCard memory={item} vaultId={vaultId!} index={index} />
         )}
         onMomentumScrollBegin={() => {
           onEndReachedCalledDuringMomentum.current = false;
@@ -363,117 +501,287 @@ const VaultDetailScreen = () => {
         ListFooterComponent={
           <View style={styles.footerContainer}>
             {loadingMore && <ActivityIndicator style={styles.loadingMoreIndicator} color="#6C63FF" />}
-            <TouchableOpacity
-              style={[styles.leaveButton, isLeaving && styles.leaveButtonDisabled]}
-              onPress={handleLeaveVault}
-              disabled={isLeaving}
-            >
-              {isLeaving ? (
-                <ActivityIndicator size="small" color="#FF3B30" />
-              ) : (
-                <Text style={styles.leaveButtonText}>Leave Vault</Text>
-              )}
-            </TouchableOpacity>
           </View>
         }
       />
-    </KeyboardAvoidingView>
+
+      {/* Premium FAB */}
+      <Animated.View style={{ 
+        transform: [{ scale: fabScale }],
+        position: 'absolute',
+        right: 20,
+        bottom: tabBarHeight + 20,
+        zIndex: 100,
+      }}>
+        <ScalePressable 
+          style={styles.fab}
+          onPress={() => setIsModalVisible(true)}
+          scaleTo={ANIMATION.FAB_PRESS_SCALE}
+          useOpacity={false} // FAB keeps solid color
+        >
+          <Ionicons name="add" size={32} color="#FFFFFF" />
+        </ScalePressable>
+      </Animated.View>
+
+      {/* ─── Settings Bottom Sheet ─── */}
+      <Modal 
+        visible={showSettings} 
+        transparent 
+        animationType="none"
+        statusBarTranslucent
+      >
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <View style={styles.modalOverlay} pointerEvents="box-none">
+            {/* Backdrop */}
+            <Animated.View 
+              pointerEvents={showSettings ? "auto" : "none"}
+              style={[
+                styles.backdrop,
+                {
+                  opacity: sheetAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0, 1],
+                  })
+                }
+              ]}
+            >
+              <Pressable 
+                style={StyleSheet.absoluteFill} 
+                onPress={handleBackdropPress} 
+              />
+            </Animated.View>
+
+          {/* Sheet */}
+          <Animated.View style={[
+            styles.bottomSheet,
+            {
+              transform: [{
+                translateY: sheetAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [600, 0],
+                })
+              }],
+              paddingBottom: Math.max(insets.bottom, 24),
+            }
+          ]}>
+            <View style={styles.dragIndicator} />
+            
+            <View style={styles.sheetContent}>
+              <ScalePressable 
+                onPress={handleLeavePress}
+                disabled={isLeaving}
+                scaleTo={0.96}
+                style={styles.actionButton}
+              >
+                <Text style={styles.leaveText}>Leave Vault</Text>
+              </ScalePressable>
+            </View>
+          </Animated.View>
+        </View>
+      </View>
+    </Modal>
+
+      {/* Premium Creation Modal */}
+      <Modal
+        animationType="slide"
+        transparent={false}
+        visible={isModalVisible}
+        onRequestClose={handleCloseModal}
+      >
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <SafeAreaView style={styles.modalContainer}>
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={{ flex: 1 }}
+          >
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={handleCloseModal}>
+                <Text style={styles.modalCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>New Memory</Text>
+              <TouchableOpacity 
+                onPress={handleAddMemory}
+                disabled={(!newMemory.trim() && !selectedImage) || isAdding}
+              >
+                <Text style={[
+                  styles.modalShare,
+                  ((!newMemory.trim() && !selectedImage) || isAdding) && { color: '#3A3A3C' }
+                ]}>
+                  {isAdding ? 'Posting...' : 'Share'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView style={styles.modalContent} keyboardShouldPersistTaps="handled">
+              <TextInput
+                style={styles.modalInput}
+                placeholder="What's the memory?"
+                placeholderTextColor="#8E8E93"
+                value={newMemory}
+                onChangeText={setNewMemory}
+                multiline
+                autoFocus
+              />
+              
+              <ImagePickerButton 
+                onImageSelected={setSelectedImage} 
+                selectedImage={selectedImage}
+              />
+            </ScrollView>
+          </KeyboardAvoidingView>
+          </SafeAreaView>
+        </View>
+      </Modal>
+    </Animated.View>
   );
 };
+
+
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0B0B0B',
-    paddingHorizontal: 20,
-    paddingTop: 60,
+    backgroundColor: '#000000',
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
+  headerAction: {
+    marginRight: 8,
   },
-  backContainer: { marginRight: 16 },
-  backButton: { color: '#6C63FF', fontSize: 16, fontWeight: '600' },
-  title: { color: '#FFFFFF', fontSize: 24, fontWeight: '700', flex: 1 },
-
-  inputContainer: {
-    backgroundColor: '#1C1C1E',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
+  listContent: {
+    paddingTop: Platform.OS === 'ios' ? 120 : 20, 
+    paddingBottom: 160, // Account for floating input bar
+    paddingHorizontal: 0, // MemoryCards handle their own margins now
   },
-  inputRow: { flexDirection: 'row', alignItems: 'flex-end' },
-  input: {
-    flex: 1,
-    color: '#FFFFFF',
-    fontSize: 16,
-    maxHeight: 120,
-    paddingTop: 8,
-    paddingBottom: 8,
-    marginLeft: 12,
-  },
-  addButton: {
+  
+  // PREMIUM FAB
+  fab: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     backgroundColor: '#6C63FF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginLeft: 12,
-    minWidth: 60,
-    alignItems: 'center',
-  },
-  addButtonDisabled: { backgroundColor: '#3A3A3C' },
-  addButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 14 },
-
-  previewContainer: {
-    marginTop: 12,
-    position: 'relative',
-    width: 80,
-    height: 80,
-  },
-  previewImage: {
-    width: 80,
-    height: 80,
-    borderRadius: 8,
-    backgroundColor: '#0B0B0B',
-  },
-  removeImageButton: {
-    position: 'absolute',
-    top: -6,
-    right: -6,
-    backgroundColor: '#FF3B30',
-    width: 20,
-    height: 20,
-    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#1C1C1E',
+    shadowColor: '#6C63FF',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+    zIndex: 100,
   },
-  removeImageText: { color: '#FFFFFF', fontSize: 12, fontWeight: '700' },
 
-  listContent: { paddingBottom: 16 },
-  emptyContainer: { alignItems: 'center', marginTop: 60 },
-  emptyText: { color: '#FFFFFF', fontSize: 18, fontWeight: '600', marginBottom: 8 },
-  emptySubText: { color: '#8E8E93', fontSize: 14 },
-
-  footerContainer: { paddingVertical: 20, gap: 16 },
-  loadingMoreIndicator: { padding: 8 },
-
-  leaveButton: {
-    marginTop: 8,
-    marginBottom: 40,
-    paddingVertical: 15,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#3A3A3C',
+  // PREMIUM MODAL
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#000000',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 59, 48, 0.05)',
+    padding: 16,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#1C1C1E',
   },
-  leaveButtonDisabled: { opacity: 0.5 },
-  leaveButtonText: { color: '#FF3B30', fontSize: 16, fontWeight: '600' },
+  modalCancel: {
+    color: '#FF453A',
+    fontSize: 17,
+  },
+  modalTitle: {
+    color: '#FFFFFF',
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  modalShare: {
+    color: '#6C63FF',
+    fontSize: 17,
+    fontWeight: '600',
+  },
+  modalContent: {
+    flex: 1,
+    padding: 16,
+  },
+  modalInput: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    minHeight: 120,
+    textAlignVertical: 'top',
+  },
+
+
+  emptyContainer: {
+    flex: 1,
+    alignItems: 'center',
+    paddingTop: 100,
+  },
+  emptyText: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+    marginBottom: 8,
+  },
+  emptySubText: {
+    color: '#8E8E93',
+    fontSize: 15,
+  },
+
+  footerContainer: {
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  loadingMoreIndicator: {
+    padding: 8,
+  },
+
+  // ─── Settings Sheet Styles ───
+  modalOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'flex-end',
+  },
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  bottomSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: '#1C1C1E',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 12,
+    paddingHorizontal: 20,
+    // iOS Shadow
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    // Android Shadow
+    elevation: 20,
+  },
+  dragIndicator: {
+    width: 36,
+    height: 4,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 12,
+  },
+  sheetContent: {
+    width: '100%',
+  },
+  actionButton: {
+    width: '100%',
+    paddingVertical: 16,
+    alignItems: 'center',
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(255,255,255,0.08)',
+    marginTop: 8,
+  },
+  leaveText: {
+    color: '#FF453A',
+    fontSize: 17,
+    fontWeight: '600',
+  },
 });
 
 export default VaultDetailScreen;
