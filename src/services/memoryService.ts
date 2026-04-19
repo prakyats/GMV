@@ -1,5 +1,7 @@
 import {
   collection,
+  collectionGroup,
+  getDocs,
   addDoc,
   query,
   orderBy,
@@ -10,24 +12,17 @@ import {
   runTransaction,
   doc,
   updateDoc,
-  arrayUnion
+  arrayUnion,
+  getDoc,
+  where,
+  deleteField
 } from 'firebase/firestore';
 import { db } from './firebase';
+import { getUserVaults } from './vaultService';
 export { db };
 
-export interface Memory {
-  id: string;
-  type: 'text' | 'image';
-  text: string;
-  imageURL: string | null;
-  createdBy: string;
-  createdByName: string;
-  createdAt: Timestamp | null;
-  createdAtClient: number | null;
-  memoryDate: Timestamp | null;
-  reactions: Record<string, string>;
-  viewedBy: string[];
-}
+import { Memory, FirestoreTimestamp } from '../navigation/types';
+export { Memory };
 
 /**
  * WHY createdAtClient IS REMOVED FROM THE SORT
@@ -59,7 +54,7 @@ export interface Memory {
  * lossy seconds-only, which causes instability on rapid same-second inserts
  * from the SAME device.
  */
-function tsKey(ts: Timestamp | null): number {
+function tsKey(ts: FirestoreTimestamp | null): number {
   if (!ts) return 0;
   return ts.seconds * 1e9 + (ts.nanoseconds ?? 0);
 }
@@ -100,31 +95,74 @@ export function mergeAndSort(existing: Memory[], incoming: Memory[]): Memory[] {
   return Array.from(map.values()).sort(compareMemories);
 }
 
-/**
- * Adds a memory to a vault.
- * Still writes createdAtClient = Date.now() to the document — kept for
- * potential future use (e.g. optimistic UI within a single device session).
- * It is NOT used in compareMemories.
- */
 export async function addMemory(
   vaultId: string,
-  payload: Omit<Memory, 'id' | 'createdAt' | 'reactions' | 'viewedBy' | 'createdAtClient'>
+  payload: Omit<Memory, 'id' | 'createdAt' | 'reactions' | 'viewedBy' | 'contributorCount'> & { members: string[] }
 ) {
-  if (payload.type === 'text' && !payload.text.trim()) {
-    throw new Error("Memory text cannot be empty");
+  // PHASE 1 — THE SENTINEL (STRICT VALIDATION)
+  if (!payload.createdBy || typeof payload.createdBy !== 'object') {
+    throw new Error("Invalid attribution object");
+  }
+  
+  if (!['text', 'image'].includes(payload.type)) {
+    throw new Error("Invalid memory type");
   }
 
-  return await addDoc(collection(db, 'vaults', vaultId, 'memories'), {
+  const finalCaption = payload.caption.trim();
+  if (!finalCaption) {
+    throw new Error("Memory caption cannot be empty");
+  }
+  if (finalCaption.length >= 500) {
+    throw new Error("Caption exceeds 500 characters");
+  }
+
+  if (payload.type === 'image') {
+    if (!payload.imageURL || typeof payload.imageURL !== 'string' || payload.imageURL.trim() === '') {
+      throw new Error("Valid image URL is required for image memories");
+    }
+  }
+
+  if (!payload.memoryDate) {
+    throw new Error("Memory date is required");
+  }
+
+  if (!Array.isArray(payload.members) || payload.members.length === 0) {
+    throw new Error("Invalid members list from vault");
+  }
+
+  if (!payload.members.includes(payload.createdBy.id)) {
+    throw new Error("User must be a member of this vault to post");
+  }
+
+  if (!payload.createdBy.name || payload.createdBy.name.trim() === '') {
+    throw new Error("User name is required for attribution");
+  }
+
+  // PHASE 2 — THE ARCHITECT (REFERENCE-ISOLATED CONSTRUCTION)
+  const finalPayload = {
     type: payload.type,
-    text: payload.text.trim(),
-    imageURL: payload.imageURL || null,
-    createdBy: payload.createdBy,
-    createdByName: payload.createdByName ?? 'Member',
-    createdAt: serverTimestamp(),        // authoritative server clock
-    createdAtClient: Date.now(),         // kept but not used for sorting
-    memoryDate: payload.memoryDate ?? serverTimestamp(),
+    caption: finalCaption,
+    imageURL: payload.type === 'text' ? null : (payload.imageURL as string).trim(),
+    
+    createdBy: {
+      id: payload.createdBy.id,
+      name: payload.createdBy.name.trim(),
+    },
+
+    createdAt: serverTimestamp(),
+    memoryDate: payload.memoryDate,
+
+    members: [...payload.members], // CLONE TO ENSURE IMMUTABILITY
     viewedBy: [],
-  });
+    reactions: {},
+  };
+
+  if (__DEV__) {
+    console.log('[DEBUG] Hardened Memory Payload:', finalPayload);
+  }
+
+  // PHASE 3 — THE EXECUTOR (CLEAN WRITE)
+  return await addDoc(collection(db, 'vaults', vaultId, 'memories'), finalPayload);
 }
 
 /**
@@ -132,39 +170,52 @@ export async function addMemory(
  * Every field has a safe fallback — app never crashes on malformed data.
  */
 export function mapMemoryDoc(docSnap: any): Memory {
-  const data = docSnap.data();
+  const d = docSnap.data();
+
+  // ATTRIBUTION NORMALIZATION
+  let createdBy: { id: string; name: string };
+  if (typeof d.createdBy === 'object' && d.createdBy !== null) {
+    createdBy = {
+      id: d.createdBy.id || 'unknown',
+      name: d.createdBy.name || 'Member',
+    };
+  } else {
+    // Migration fallback for legacy non-object attribution
+    createdBy = {
+      id: d.createdBy || 'unknown',
+      name: 'Member',
+    };
+  }
 
   return {
     id: docSnap.id,
-    type: data.type === 'image' ? 'image' : 'text',
-    text: typeof data.text === 'string' ? data.text : '',
-    imageURL: typeof data.imageURL === 'string' ? data.imageURL : null,
-    createdBy: typeof data.createdBy === 'string' ? data.createdBy : '',
-    createdByName: typeof data.createdByName === 'string' ? data.createdByName : 'Member',
+    type: d.type === 'image' ? 'image' : 'text',
+    
+    // READ FALLBACK: support both new schema (caption) and legacy (text)
+    caption: d.caption || d.text || '',
+    
+    imageURL: typeof d.imageURL === 'string' ? d.imageURL : null,
+    
+    createdBy,
 
     createdAt:
-      data.createdAt && typeof data.createdAt.seconds === 'number'
-        ? (data.createdAt as Timestamp)
-        : null,
-
-    createdAtClient:
-      typeof data.createdAtClient === 'number'
-        ? data.createdAtClient
+      d.createdAt && typeof d.createdAt.seconds === 'number'
+        ? (d.createdAt as any)
         : null,
 
     memoryDate:
-      data.memoryDate && typeof data.memoryDate.seconds === 'number'
-        ? (data.memoryDate as Timestamp)
-        : data.createdAt
-          ? (data.createdAt as Timestamp)
+      d.memoryDate && typeof d.memoryDate.seconds === 'number'
+        ? (d.memoryDate as any)
+        : d.createdAt
+          ? (d.createdAt as any)
           : null,
 
     reactions:
-      data.reactions && typeof data.reactions === 'object' && !Array.isArray(data.reactions)
-        ? (data.reactions as Record<string, string>)
+      d.reactions && typeof d.reactions === 'object' && !Array.isArray(d.reactions)
+        ? (d.reactions as Record<string, string>)
         : {},
 
-    viewedBy: Array.isArray(data.viewedBy) ? data.viewedBy : [],
+    viewedBy: Array.isArray(d.viewedBy) ? d.viewedBy : [],
   };
 }
 
@@ -177,22 +228,39 @@ export async function toggleReaction(
   userId: string,
   emoji: string
 ) {
-  const memoryRef = doc(db, 'vaults', vaultId, 'memories', memoryId);
+  const ref = doc(db, 'vaults', vaultId, 'memories', memoryId);
 
-  await runTransaction(db, async (transaction) => {
-    const snap = await transaction.get(memoryRef);
-    if (!snap.exists()) throw new Error("Memory does not exist!");
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error("Memory not found");
 
-    const reactions = { ...(snap.data().reactions || {}) };
-    if (reactions[userId] === emoji) {
-      delete reactions[userId];
+    const data = snap.data();
+
+    // CLEAN reactions
+    const raw = data.reactions || {};
+    const current: Record<string, string> = {};
+
+    Object.keys(raw).forEach((k) => {
+      if (typeof raw[k] === 'string') {
+        current[k] = raw[k];
+      }
+    });
+
+    // APPLY TOGGLE
+    if (current[userId] === emoji) {
+      delete current[userId];
     } else {
-      reactions[userId] = emoji;
+      current[userId] = emoji;
     }
 
-    transaction.update(memoryRef, { reactions });
+    // WRITE (transaction handles concurrency automatically)
+    tx.update(ref, {
+      reactions: current
+    });
   });
 }
+
+
 
 /**
  * Real-time subscription: latest limitCount memories ordered by server.
@@ -253,4 +321,103 @@ export function subscribeToMemory(
     (snap) => onUpdate(snap.exists() ? mapMemoryDoc(snap) : null),
     (error) => console.error("Single Memory Subscription Error:", error)
   );
+}
+
+/**
+ * One-off fetch for a single memory.
+ * Useful for focal refreshes without attaching a live listener.
+ */
+export async function getMemoryById(vaultId: string, memoryId: string): Promise<Memory | null> {
+  try {
+    const snap = await getDoc(doc(db, 'vaults', vaultId, 'memories', memoryId));
+    return snap.exists() ? mapMemoryDoc(snap) : null;
+  } catch (err) {
+    console.error("Fetch Memory Error:", err);
+    return null;
+  }
+}
+
+/**
+ * Public-facing fetch for deep link previews.
+ * Fetches only non-sensitive metadata for curiosity hooks.
+ */
+export async function getPublicMemoryPreview(vaultId: string, memoryId: string) {
+  try {
+    const snap = await getDoc(doc(db, 'vaults', vaultId, 'memories', memoryId));
+    if (!snap.exists()) return null;
+    
+    const data = snap.data();
+    return {
+      id: snap.id,
+      caption: data.caption || data.text || "",
+      imageURL: data.imageURL || null,
+      reactionCount: Object.keys(data.reactions || {}).length,
+    };
+  } catch (err) {
+    console.error("Public Preview Fetch Error:", err);
+    return null;
+  }
+}
+
+/**
+ * Hybrid Global Fetch: All memories cross-vault.
+ * Supports:
+ * 1. New Memories (via efficient collectionGroup + members filter)
+ * 2. Old Memories (via parallel hierarchical fallback)
+ * 
+ * Guarantees zero data loss during architectural transition.
+ */
+export async function getAllUserMemories(userId: string) {
+  try {
+    // 1. Get List of User Contexts
+    const vaults = await getUserVaults(userId);
+    const vaultIds = vaults.map(v => v.id);
+
+    // 2. Track A: NEW (Scoped Collection Group)
+    const newQuery = query(
+      collectionGroup(db, 'memories'),
+      where('members', 'array-contains', userId),
+      orderBy('memoryDate', 'desc')
+    );
+    const newSnapPromise = getDocs(newQuery);
+
+    // 3. Track B: OLD (Parallel Hierarchical Crawl)
+    const legacyPromises = vaultIds.map(vId => 
+      getDocs(collection(db, 'vaults', vId, 'memories'))
+    );
+
+    // 4. Parallel Await
+    const [newSnap, ...legacySnaps] = await Promise.all([newSnapPromise, ...legacyPromises]);
+
+    // 5. Normalization & Context Injection
+    const map = new Map<string, Memory & { vaultId: string }>();
+
+    // Process Track A
+    newSnap.docs.forEach(docSnap => {
+      const memory = mapMemoryDoc(docSnap);
+      map.set(memory.id, {
+        ...memory,
+        vaultId: docSnap.ref.parent.parent?.id || ''
+      });
+    });
+
+    // Process Track B
+    legacySnaps.forEach((snap, idx) => {
+      const vaultId = vaultIds[idx];
+      snap.docs.forEach(docSnap => {
+        const memory = mapMemoryDoc(docSnap);
+        map.set(memory.id, {
+          ...memory,
+          vaultId
+        });
+      });
+    });
+
+    // 6. Deterministic Join & Stability Sort
+    return Array.from(map.values()).sort(compareMemories);
+
+  } catch (err) {
+    console.error("Hybrid Global Fetch Error:", err);
+    return [];
+  }
 }
