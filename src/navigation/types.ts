@@ -3,6 +3,11 @@ export type FirestoreTimestamp = {
   nanoseconds?: number;
 };
 
+export interface VaultMember {
+  id: string;
+  name: string;
+}
+
 export interface Memory {
   id: string;
   vaultId?: string;
@@ -33,6 +38,11 @@ export type BottomTabParamList = {
 export type VaultStackParamList = {
   VaultList: undefined;
   VaultDetail: { vaultId: string; vaultName: string };
+  VaultMembers: { vaultId: string; vaultName: string; createdBy: string };
+};
+
+export type ReliveStackParamList = {
+  OnThisDayMain: undefined;
 };
 
 export type MainStackParamList = {
