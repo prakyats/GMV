@@ -10,6 +10,8 @@ import {
   Pressable,
   Platform,
   Animated,
+  ToastAndroid,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { ScalePressable } from '../../components';
@@ -19,6 +21,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import { useAuthStore } from '../../store/authStore';
 import { useVaultStore } from '../../store/vaultStore';
+import { useUIStore } from '../../store/uiStore';
 import { createVault, getUserVaults, joinVault } from '../../services/vaultService';
 import { VaultStackParamList } from '../../navigation/types';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,8 +29,8 @@ import { Ionicons } from '@expo/vector-icons';
 type VaultListNavigationProp = NativeStackNavigationProp<VaultStackParamList, 'VaultList'>;
 
 const VaultListScreen = () => {
-  const { user } = useAuthStore();
-  const { setCurrentVault } = useVaultStore();
+  const { user, isDeletingAccount } = useAuthStore();
+  const { setCurrentVault, vaults, setVaults } = useVaultStore();
   const navigation = useNavigation<VaultListNavigationProp>();
   const scrollRef = React.useRef<ScrollView>(null);
 
@@ -52,7 +55,6 @@ const VaultListScreen = () => {
     }).start();
   }, [fadeAnim, fabScale]);
 
-  const [vaults, setVaults] = useState<any[]>([]);
   const [isCreating, setIsCreating] = useState(false);
   const [vaultName, setVaultName] = useState('');
   const [loading, setLoading] = useState(false);
@@ -88,12 +90,12 @@ const VaultListScreen = () => {
   }, [navigation, isCreating]);
 
   const fetchVaults = async () => {
-    if (!user?.uid) return;
+    if (!user?.uid || isDeletingAccount) return;
     try {
       setLoading(true);
       setError(null);
       const data = await getUserVaults(user.uid);
-      setVaults(data);
+      setVaults(data, user.uid);
     } catch (err) {
       setError("Failed to load vaults");
     } finally {
@@ -106,12 +108,11 @@ const VaultListScreen = () => {
   }, [user?.uid]);
 
   const handleCreateVault = async () => {
-    if (loading || !user) return;
+    if (loading || !user || isDeletingAccount) return;
     try {
       setLoading(true);
       setError(null);
-      const userName = user.displayName || user.email || 'Member';
-      await createVault(vaultName, user.uid, userName);
+      await createVault(vaultName, user.uid, user);
       setVaultName('');
       setIsCreating(false);
       await fetchVaults();
@@ -123,7 +124,7 @@ const VaultListScreen = () => {
   };
 
   const handleJoinVault = async () => {
-    if (joining || !user?.uid) return;
+    if (joining || !user?.uid || isDeletingAccount) return;
     const code = joinCode.trim().toUpperCase();
     if (code.length !== 6) {
       setJoinError("Enter a valid 6-character code");
@@ -133,8 +134,7 @@ const VaultListScreen = () => {
     try {
       setJoining(true);
       setJoinError(null);
-      const userName = user.displayName || user.email || 'Member';
-      await joinVault(code, user.uid, userName);
+      await joinVault(code, user.uid, user);
       setJoinCode('');
       await fetchVaults();
     } catch (err: any) {
@@ -151,6 +151,22 @@ const VaultListScreen = () => {
       vaultId: vault.id,
       vaultName: vault.name,
     });
+  };
+  
+  const handleCopyCode = async (code: string) => {
+    if (!code) return;
+    try {
+      await Clipboard.setStringAsync(code);
+      triggerHaptic('success');
+      useUIStore.getState().showToast("Copied to clipboard");
+    } catch (err) {
+      triggerHaptic('error');
+      useUIStore.getState().showAlert({
+        title: "Error",
+        message: "Failed to copy code",
+        type: "error"
+      });
+    }
   };
 
   return (
@@ -235,23 +251,30 @@ const VaultListScreen = () => {
           </View>
         ) : (
           <View style={styles.vaultListContainer}>
-            {vaults.map((vault, index) => (
+            {vaults.map((vault, index, filteredArray) => (
               <ScalePressable 
                 key={vault.id} 
                 style={[
                   styles.vaultItem,
-                  index === vaults.length - 1 && { borderBottomWidth: 0 }
+                  index === filteredArray.length - 1 && { borderBottomWidth: 0 }
                 ]}
                 onPress={() => handleVaultPress(vault)}
               >
-                <View style={styles.vaultItemContent}>
+                <View style={styles.vaultItemContent} pointerEvents="box-none">
                   <View style={styles.vaultIconContainer}>
                     <Ionicons name="cube-outline" size={24} color="#6C63FF" />
                   </View>
-                  <View style={styles.vaultInfo}>
+                  <View style={styles.vaultInfo} pointerEvents="box-none">
                     <Text style={styles.vaultName}>{vault.name}</Text>
                     {vault.inviteCode && (
-                      <Text style={styles.inviteCodeText}>Code: {vault.inviteCode}</Text>
+                      <TouchableOpacity 
+                        onPress={() => handleCopyCode(vault.inviteCode)}
+                        style={styles.codeContainer}
+                        activeOpacity={0.7}
+                      >
+                        <Text style={styles.inviteCodeText}>Code: {vault.inviteCode}</Text>
+                        <Text style={styles.copyHint}>Tap to copy</Text>
+                      </TouchableOpacity>
                     )}
                   </View>
                   <Ionicons name="chevron-forward" size={20} color="#38383A" />
@@ -386,7 +409,18 @@ const styles = StyleSheet.create({
   inviteCodeText: {
     color: '#8E8E93',
     fontSize: 13,
+  },
+  codeContainer: {
+    paddingVertical: 4,
     marginTop: 2,
+    alignSelf: 'flex-start',
+  },
+  copyHint: {
+    color: '#6C63FF',
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
+    textTransform: 'uppercase',
   },
   errorText: {
     color: '#FF453A',

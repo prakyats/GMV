@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { VaultMember } from '../../navigation/types';
+import { getUserInitial } from '../../utils/user';
 
 interface MemberAvatarProps {
   member: VaultMember;
@@ -26,9 +27,7 @@ const getAvatarColor = (userId: string): string => {
   return AVATAR_COLORS[Math.abs(hash) % AVATAR_COLORS.length];
 };
 
-const getInitial = (name: string): string => {
-  return (name || '?').charAt(0).toUpperCase();
-};
+// Initial extraction logic moved to global utility getUserInitial
 
 /**
  * Premium member avatar component.
@@ -43,7 +42,7 @@ const MemberAvatar: React.FC<MemberAvatarProps> = ({
   size = 36,
 }) => {
   const bgColor = getAvatarColor(member.id);
-  const initial = getInitial(member.name);
+  const initial = getUserInitial(member);
 
   const avatarStyle = {
     width: size,
