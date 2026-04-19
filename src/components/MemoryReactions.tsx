@@ -12,6 +12,9 @@ import {
 } from 'react-native';
 import { useAuthStore } from '../store/authStore';
 import { toggleReaction } from '../services/memoryService';
+import { ANIMATION } from '../constants/theme';
+import { ScalePressable } from './common/ScalePressable';
+import { triggerHaptic } from '../utils/haptics';
 
 interface ReactionBarProps {
   vaultId: string;
@@ -42,9 +45,13 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({
   const [loading, setLoading] = useState<string | null>(null);
   const [visible, setVisible] = useState(false);
 
-  // Animation values
+  // Animation values for picker
   const scale = useRef(new Animated.Value(0.8)).current;
   const opacity = useRef(new Animated.Value(0)).current;
+
+  // Individual pulses for each emoji (only for local user actions)
+  const pulseAnims = useRef<Record<string, Animated.Value>>({}).current;
+  const [lastTappedEmoji, setLastTappedEmoji] = useState<string | null>(null);
 
   const reactions = rawReactions || {};
 
@@ -84,8 +91,7 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({
       Animated.parallel([
         Animated.spring(scale, {
           toValue: 1,
-          friction: 8,
-          tension: 40,
+          ...ANIMATION.PRESS_SPRING,
           useNativeDriver: true,
         }),
         Animated.timing(opacity, {
@@ -94,6 +100,8 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({
           useNativeDriver: true,
         }),
       ]).start();
+      
+      triggerHaptic('light'); // Picker reveal haptic
     }
   }, [openPicker, scale, opacity]);
 
@@ -106,17 +114,46 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({
   Object.values(reactions).forEach((emoji) => {
     if (typeof emoji === 'string') {
       grouped[emoji] = (grouped[emoji] || 0) + 1;
+      // Initialize pulse anim if needed
+      if (!pulseAnims[emoji]) {
+        pulseAnims[emoji] = new Animated.Value(1);
+      }
+    }
+  });
+
+  // Also initialize pulse anims for standard emojis
+  EMOJIS.forEach(emoji => {
+    if (!pulseAnims[emoji]) {
+      pulseAnims[emoji] = new Animated.Value(1);
     }
   });
 
   const handleToggle = async (emoji: string) => {
     if (!user || loading !== null) return;
+    
+    // Set local state for pulse targeting
+    setLastTappedEmoji(emoji);
+    
+    // Trigger Haptic & Pulse immediately (Physical Reward)
+    triggerHaptic('medium');
+    
+    const anim = pulseAnims[emoji] || new Animated.Value(1);
+    Animated.sequence([
+      Animated.spring(anim, { 
+        toValue: ANIMATION.REACTION_SCALE, 
+        ...ANIMATION.PRESS_SPRING, 
+        useNativeDriver: true 
+      }),
+      Animated.spring(anim, { 
+        toValue: 1, 
+        ...ANIMATION.PRESS_SPRING, 
+        useNativeDriver: true 
+      })
+    ]).start(() => setLastTappedEmoji(null));
+
     setLoading(emoji);
     try {
       await toggleReaction(vaultId, memoryId, user.uid, emoji);
-      if (__DEV__) {
-        console.log(`[REACTION] Success: ${emoji}`);
-      }
     } catch (err) {
       console.warn("Reaction failed:", err);
     } finally {
@@ -133,12 +170,10 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({
             const isSelected = reactions[user?.uid || ''] === emoji;
 
             return (
-              <TouchableOpacity
+              <ScalePressable
                 key={emoji}
                 onPress={() => handleToggle(emoji)}
                 disabled={loading !== null}
-                accessibilityLabel={`Reaction: ${emoji}, ${count} people`}
-                accessibilityRole="button"
                 style={[
                   styles.reactionButton,
                   isSelected && styles.selectedButton
@@ -147,12 +182,15 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({
                 {loading === emoji ? (
                   <ActivityIndicator size="small" color="#6C63FF" />
                 ) : (
-                  <View style={styles.innerButton}>
+                  <Animated.View style={[
+                    styles.innerButton,
+                    { transform: [{ scale: pulseAnims[emoji] || 1 }] }
+                  ]}>
                     <Text style={styles.emojiText}>{emoji}</Text>
                     <Text style={styles.countText}>{count}</Text>
-                  </View>
+                  </Animated.View>
                 )}
-              </TouchableOpacity>
+              </ScalePressable>
             );
           })}
         </View>
@@ -166,15 +204,17 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({
         statusBarTranslucent
         onRequestClose={handleClose}
       >
-        <Pressable 
-          style={styles.modalOverlay} 
-          onPress={handleClose}
-          accessibilityLabel="Close reaction picker"
-          accessibilityRole="button"
-        >
-          {/* Transparent full-screen dismiss area */}
-          <View style={StyleSheet.absoluteFill} />
-        </Pressable>
+        <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+          <Pressable 
+            style={styles.modalOverlay} 
+            onPress={handleClose}
+            accessibilityLabel="Close reaction picker"
+            accessibilityRole="button"
+            pointerEvents={visible ? "auto" : "none"}
+          >
+            {/* Transparent full-screen dismiss area */}
+            <View style={StyleSheet.absoluteFill} />
+          </Pressable>
 
         <Animated.View 
           style={[
@@ -187,19 +227,19 @@ const MemoryReactions: React.FC<ReactionBarProps> = ({
           ]}
         >
           {EMOJIS.map((emoji) => (
-            <TouchableOpacity
+            <ScalePressable
               key={emoji}
               onPress={() => handleToggle(emoji)}
-              activeOpacity={0.6}
-              accessibilityLabel={`Select ${emoji} reaction`}
-              accessibilityRole="button"
               style={styles.pickerButton}
             >
-              <Text style={styles.pickerEmoji}>{emoji}</Text>
-            </TouchableOpacity>
+              <Animated.View style={{ transform: [{ scale: pulseAnims[emoji] || 1 }] }}>
+                <Text style={styles.pickerEmoji}>{emoji}</Text>
+              </Animated.View>
+            </ScalePressable>
           ))}
         </Animated.View>
-      </Modal>
+      </View>
+    </Modal>
     </>
   );
 };
