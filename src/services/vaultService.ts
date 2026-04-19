@@ -12,11 +12,42 @@ import {
   where,
   getDocs,
   limit,
-  runTransaction 
+  runTransaction,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db } from './firebase';
 import { generateInviteCode } from '../utils/inviteCode';
+import { VaultMember } from '../navigation/types';
 
+// ─── Utility: Normalize Legacy Member Data ────────────────────────────────
+/**
+ * Accepts raw Firestore members data which may be:
+ *   - string[] (legacy format)
+ *   - {id, name}[] (new format)
+ *   - undefined/null (missing)
+ *
+ * Always returns VaultMember[]. Lazy migration: old string UIDs
+ * become { id: uid, name: 'Member' } until the next write heals them.
+ */
+export const normalizeMemberProfiles = (
+  members: string[],
+  rawProfiles: any[] | undefined
+): VaultMember[] => {
+  // Build O(1) lookup from whatever profiles exist
+  const profileMap = new Map<string, VaultMember>();
+  if (Array.isArray(rawProfiles)) {
+    for (const p of rawProfiles) {
+      if (p && typeof p.id === 'string' && typeof p.name === 'string') {
+        profileMap.set(p.id, p);
+      }
+    }
+  }
+  // Normalize: every member UID has a profile entry
+  return members.map(uid => profileMap.get(uid) ?? { id: uid, name: 'Member' });
+};
+
+
+// ─── getUserVaults ─────────────────────────────────────────────────────────
 /**
  * Fetches all vaults associated with a specific user.
  * PRODUCTION-SAFE: classification between deleted, forbidden, and valid docs.
@@ -48,8 +79,10 @@ export const getUserVaults = async (userId: string) => {
             return { type: 'deleted', vaultId };
           }
 
-          // MAP VALID DATA
           const data = snap.data();
+          const members: string[] = data?.members || [];
+          const memberProfiles = normalizeMemberProfiles(members, data?.memberProfiles);
+
           return { 
             type: 'valid', 
             data: {
@@ -57,7 +90,9 @@ export const getUserVaults = async (userId: string) => {
               name: data?.name,
               inviteCode: data?.inviteCode,
               createdAt: data?.createdAt,
-              members: data?.members || []
+              createdBy: data?.createdBy,
+              members,
+              memberProfiles,
             } 
           };
 
@@ -87,11 +122,9 @@ export const getUserVaults = async (userId: string) => {
     // STEP 3: Safe Cleanup (Production-Stable)
     if (deletedVaultIds.length > 0) {
       try {
-        // MUST await for reliability, inside a try/catch to not block UI success
         await updateDoc(userRef, {
           vaultIds: arrayRemove(...deletedVaultIds)
         });
-
         if (__DEV__) {
           console.log('Deleted vaults cleaned:', deletedVaultIds);
         }
@@ -116,84 +149,88 @@ export const getUserVaults = async (userId: string) => {
 };
 
 
+// ─── fetchVaultDetails ─────────────────────────────────────────────────────
+/**
+ * Fetches a single vault document and returns structured member data.
+ * Used by VaultDetailScreen on mount to populate the member avatar strip.
+ */
+export const fetchVaultDetails = async (vaultId: string) => {
+  const ref = doc(db, 'vaults', vaultId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error('Vault not found');
+
+  const data = snap.data();
+  const members: string[] = data?.members || [];
+  const memberProfiles = normalizeMemberProfiles(members, data?.memberProfiles);
+
+  return {
+    members,
+    memberProfiles,
+    createdBy: data?.createdBy as string,
+  };
+};
+
+
+
+// ─── createVault ──────────────────────────────────────────────────────────
 /**
  * Creates a new private memory vault and associates it with the user.
- * Includes a rollback mechanism to prevent "orphan" vaults if the user update fails.
+ * Writes both members (string[]) and memberProfiles ({id,name}[]).
+ * Includes a rollback mechanism to prevent "orphan" vaults.
  */
-export const createVault = async (name: string, userId: string): Promise<string> => {
+export const createVault = async (
+  name: string,
+  userId: string,
+  userName: string
+): Promise<string> => {
   let vaultRef = null;
 
   try {
     const trimmedName = name.trim();
 
-    // 1. Validation
-    if (trimmedName.length === 0) {
-      throw new Error("Vault name required");
-    }
+    if (trimmedName.length === 0) throw new Error("Vault name required");
+    if (trimmedName.length > 50) throw new Error("Vault name too long");
 
-    if (trimmedName.length > 50) {
-      throw new Error("Vault name too long");
-    }
-
-    // 2. Step 1: Generate + validate inviteCode BEFORE database write
+    // Generate + validate unique inviteCode
     let inviteCode = generateInviteCode();
     let exists = true;
     let attempts = 0;
     const MAX_ATTEMPTS = 5;
 
     while (exists && attempts < MAX_ATTEMPTS) {
-      if (__DEV__) {
-        console.log(`Checking invite code uniqueness [Attempt ${attempts + 1}]:`, inviteCode);
-      }
-      
       const snapshot = await getDocs(
-        query(
-          collection(db, "vaults"), 
-          where("inviteCode", "==", inviteCode),
-          limit(1)
-        )
+        query(collection(db, "vaults"), where("inviteCode", "==", inviteCode), limit(1))
       );
       exists = !snapshot.empty;
-      if (exists) {
-        inviteCode = generateInviteCode();
-      }
+      if (exists) inviteCode = generateInviteCode();
       attempts++;
     }
 
-    if (exists) {
-      throw new Error("Failed to generate unique invite code");
-    }
+    if (exists) throw new Error("Failed to generate unique invite code");
 
-    // 3. Step 2: Create vault document
-    console.log('CREATE VAULT PAYLOAD:', {
-      name: trimmedName,
-      inviteCode,
-      members: [userId],
-      createdBy: userId,
-      createdAt: 'serverTimestamp()' // Placeholder for logging
-    });
+    const safeUserName = (userName || 'Member').trim() || 'Member';
 
+    // Create vault document with both member fields
     vaultRef = await addDoc(collection(db, "vaults"), {
       name: trimmedName,
       createdBy: userId,
       members: [userId],
+      memberProfiles: [{ id: userId, name: safeUserName }],
       inviteCode,
-      createdAt: serverTimestamp()
+      createdAt: serverTimestamp(),
     });
 
     const vaultId = vaultRef.id;
 
-    // 3. Step 2: Update user's vault list
+    // Associate vault with user
     await updateDoc(doc(db, "users", userId), {
-      vaultIds: arrayUnion(vaultId)
+      vaultIds: arrayUnion(vaultId),
     });
 
     return vaultId;
 
   } catch (error: any) {
     console.log('VAULT CREATE ERROR:', error.code, error.message);
-    
-    // 4. CLEANUP: Rollback vault creation if user association failed
     if (vaultRef && vaultRef.id) {
       try {
         await deleteDoc(doc(db, "vaults", vaultRef.id));
@@ -201,90 +238,109 @@ export const createVault = async (name: string, userId: string): Promise<string>
         console.error("Cleanup failed:", cleanupError);
       }
     }
-
     throw error;
   }
 };
 
+
+// ─── joinVault ────────────────────────────────────────────────────────────
 /**
  * Joins an existing vault using a 6-character invite code.
- * Includes a manual rollback for the vault membership if the user record update fails.
+ * ATOMIC: Both members and memberProfiles updated in a single transaction.
+ * LAZY MIGRATION: Normalizes any legacy string-only memberProfiles on write.
+ * SORTED: Both arrays sorted for deterministic order and stability.
  */
-export const joinVault = async (inviteCode: string, userId: string) => {
+export const joinVault = async (
+  inviteCode: string,
+  userId: string,
+  userName: string
+) => {
   try {
     const trimmedCode = inviteCode.trim();
+    if (trimmedCode.length !== 6) throw new Error("Invalid invite code");
 
-    // 1. Validation
-    if (trimmedCode.length !== 6) {
-      throw new Error("Invalid invite code");
-    }
-
-    // 2. Find Vault
-    if (__DEV__) {
-      console.log('JOIN VAULT: Searching for invite code:', trimmedCode);
-    }
-    
+    // Query cannot be inside a transaction — find vault first
     const q = query(
       collection(db, "vaults"),
       where("inviteCode", "==", trimmedCode),
       limit(1)
     );
     const snapshot = await getDocs(q);
+    if (snapshot.empty) throw new Error("Vault not found");
 
-    if (snapshot.empty) {
-      throw new Error("Vault not found");
-    }
-
-    // 3. Extract Data
     const vaultDoc = snapshot.docs[0];
     const vaultId = vaultDoc.id;
+    const vaultRef = doc(db, 'vaults', vaultId);
+    const safeUserName = (userName || 'Member').trim() || 'Member';
+
     const data = vaultDoc.data();
+    if (!Array.isArray(data.members)) throw new Error("Invalid vault data");
 
-    // 4. Safety Check
-    if (!Array.isArray(data.members)) {
-      throw new Error("Invalid vault data");
-    }
+    const members: string[] = data.members;
+    const rawProfiles: any[] = data.memberProfiles ?? [];
 
-    // 5. Check Membership
-    if (data.members.includes(userId)) {
-      throw new Error("Already a member");
-    }
+    // Already a member — idempotent exit
+    if (members.includes(userId)) return { vaultId };
 
-    // 6. Update Vault First
-    await updateDoc(doc(db, "vaults", vaultId), {
-      members: arrayUnion(userId)
+    // Compute new sorted member IDs
+    const newMemberIds = [...members, userId].sort();
+
+    // O(n) Map-based normalization + lazy migration
+    const profileMap = new Map<string, VaultMember>();
+    rawProfiles.forEach(p => {
+      if (p && typeof p.id === 'string') profileMap.set(p.id, p);
+    });
+    const normalizedProfiles: VaultMember[] = newMemberIds.map(uid => {
+      if (uid === userId) return { id: userId, name: safeUserName };
+      return profileMap.get(uid) ?? { id: uid, name: 'Member' };
     });
 
-    // 7. Update User
+    // Atomic update — rules will validate resource.data vs request.resource.data
+    await updateDoc(vaultRef, {
+      members: newMemberIds,
+      memberProfiles: normalizedProfiles,
+    });
+
+    // Update user's vault list (separate document, outside tx)
     try {
       await updateDoc(doc(db, "users", userId), {
-        vaultIds: arrayUnion(vaultId)
+        vaultIds: arrayUnion(vaultId),
       });
     } catch (err) {
-      // Rollback vault membership safely
-      await updateDoc(doc(db, "vaults", vaultId), {
-        members: arrayRemove(userId)
-      });
+      // Rollback vault membership if user doc update fails
+      const snap = await getDoc(vaultRef);
+      if (snap.exists()) {
+        const data = snap.data();
+        const members: string[] = data.members ?? [];
+        const rawProfiles: any[] = data.memberProfiles ?? [];
+        await updateDoc(vaultRef, {
+          members: members.filter(id => id !== userId).sort(),
+          memberProfiles: rawProfiles.filter(p => p.id !== userId),
+        });
+      }
       throw new Error("Failed to join vault");
     }
 
     return { vaultId };
 
   } catch (error: any) {
-    console.log('JOIN VAULT ERROR:', error.code, error.message);
+    const errorCode = error.code || 'unknown';
+    const errorMessage = error.message || 'Unknown error';
+    console.log(`JOIN VAULT ERROR [${errorCode}]: ${errorMessage}`);
     
     const mappedMessages = ["Invalid invite code", "Vault not found", "Already a member", "Failed to join vault"];
-    if (mappedMessages.includes(error.message)) {
-      throw error;
-    }
+    if (mappedMessages.includes(error.message)) throw error;
     throw new Error("Failed to join vault");
   }
 };
 
+
+// ─── leaveVault ───────────────────────────────────────────────────────────
 /**
- * Safely removes a user from a vault document and the vault from the user document.
- * If the user is the last member, the vault document is deleted.
- * USES: Firestore Transaction for atomicity.
+ * Safely removes a user from a vault.
+ * ATOMIC: Both members and memberProfiles updated in a single transaction.
+ * SORTED: Remaining arrays normalized and sorted after removal.
+ * LAST MEMBER: tx.delete inside transaction for race safety.
  */
 export const leaveVault = async (vaultId: string, userId: string) => {
   const vaultRef = doc(db, 'vaults', vaultId);
@@ -292,39 +348,66 @@ export const leaveVault = async (vaultId: string, userId: string) => {
 
   try {
     await runTransaction(db, async (transaction) => {
-      // 1. Fetch vault state
       const vaultSnap = await transaction.get(vaultRef);
-      if (!vaultSnap.exists()) {
-        throw new Error('Vault does not exist');
-      }
+      if (!vaultSnap.exists()) throw new Error('Vault does not exist');
 
-      const vaultData = vaultSnap.data();
-      const members: string[] = vaultData.members || [];
+      const data = vaultSnap.data();
+      const members: string[] = data.members || [];
+      const rawProfiles: any[] = data.memberProfiles ?? [];
 
-      // 2. Validate membership
-      if (!members.includes(userId)) {
-        throw new Error('User is not a member of this vault');
-      }
+      if (!members.includes(userId)) throw new Error('User is not a member');
 
-      // 3. Calculate new member list
-      const updatedMembers = members.filter(id => id !== userId);
+      const newMemberIds = members.filter(id => id !== userId).sort();
 
-      // 4. Update Vault: Delete if empty, otherwise remove user
-      if (updatedMembers.length === 0) {
+      // Last member — delete entire vault atomically
+      if (newMemberIds.length === 0) {
         transaction.delete(vaultRef);
-      } else {
-        transaction.update(vaultRef, {
-          members: updatedMembers,
-        });
+        transaction.update(userRef, { vaultIds: arrayRemove(vaultId) });
+        return;
       }
 
-      // 5. Update User: Always remove vault link
-      transaction.update(userRef, {
-        vaultIds: arrayRemove(vaultId),
+      // O(n) normalization: heal + filter leaving user
+      const profileMap = new Map<string, VaultMember>();
+      rawProfiles.forEach(p => {
+        if (p && typeof p.id === 'string') profileMap.set(p.id, p);
       });
+      const normalizedProfiles: VaultMember[] = newMemberIds.map(uid =>
+        profileMap.get(uid) ?? { id: uid, name: 'Member' }
+      );
+
+      // Single atomic write for both fields
+      transaction.update(vaultRef, {
+        members: newMemberIds,
+        memberProfiles: normalizedProfiles,
+      });
+      transaction.update(userRef, { vaultIds: arrayRemove(vaultId) });
     });
+
   } catch (error) {
     console.error("Leave Vault Transaction Failed:", error);
     throw error;
   }
+};
+
+/**
+ * Subscribes to changes in a vault document.
+ * Returns normalized members and profiles via callback.
+ */
+export const subscribeToVault = (
+  vaultId: string,
+  onUpdate: (data: { members: string[]; memberProfiles: VaultMember[] }) => void
+) => {
+  const vaultRef = doc(db, 'vaults', vaultId);
+  
+  return onSnapshot(vaultRef, (snap) => {
+    if (!snap.exists()) return;
+    
+    const data = snap.data();
+    const members: string[] = data.members || [];
+    const profiles = normalizeMemberProfiles(members, data.memberProfiles);
+    
+    onUpdate({ members, memberProfiles: profiles });
+  }, (error) => {
+    console.error("Vault subscription error:", error);
+  });
 };

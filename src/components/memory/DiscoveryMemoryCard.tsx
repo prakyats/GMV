@@ -1,7 +1,9 @@
 import React from 'react';
-import { View, Text, StyleSheet, Image, ViewStyle, Pressable } from 'react-native';
+import { View, Text, StyleSheet, Image, ViewStyle } from 'react-native';
 import { MainStackParamList, Memory } from '../../navigation/types';
 import { LinearGradient } from 'expo-linear-gradient';
+import { ScalePressable } from '../common/ScalePressable';
+import { FadeInStagger } from '../common/FadeInStagger';
 
 interface DiscoveryMemoryCardProps {
   memory: Memory;
@@ -10,6 +12,7 @@ interface DiscoveryMemoryCardProps {
   variant?: 'hero' | 'list';
   style?: ViewStyle;
   onPress?: (memory: Memory) => void;
+  index?: number;
 }
 
 const DiscoveryMemoryCard: React.FC<DiscoveryMemoryCardProps> = ({ 
@@ -18,7 +21,8 @@ const DiscoveryMemoryCard: React.FC<DiscoveryMemoryCardProps> = ({
   popularityThreshold = 5,
   variant = 'list', 
   style, 
-  onPress 
+  onPress,
+  index = 0
 }) => {
   const isHero = variant === 'hero';
 
@@ -48,15 +52,15 @@ const DiscoveryMemoryCard: React.FC<DiscoveryMemoryCardProps> = ({
   const dynamicLabel = getDynamicLabel();
 
   return (
-    <Pressable 
-      onPress={() => onPress?.(memory)}
-      style={({ pressed }) => [
-        styles.card, 
-        isHero ? styles.heroCard : styles.listCard,
-        { transform: [{ scale: pressed ? 0.97 : 1 }] },
-        style
-      ]}
-    >
+    <FadeInStagger index={index}>
+      <ScalePressable 
+        onPress={() => onPress?.(memory)}
+        style={[
+          styles.card, 
+          isHero ? styles.heroCard : styles.listCard,
+          style
+        ]}
+      >
       {memory.imageURL ? (
         <Image
           source={{ uri: memory.imageURL }}
@@ -84,28 +88,29 @@ const DiscoveryMemoryCard: React.FC<DiscoveryMemoryCardProps> = ({
           {memory.caption}
         </Text>
       </View>
-    </Pressable>
+      </ScalePressable>
+    </FadeInStagger>
   );
 };
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 12,
-    backgroundColor: '#1A1A1A',
+    borderRadius: 16,
+    backgroundColor: '#1C1C1E',
     shadowColor: "#000",
-    shadowOpacity: 0.5,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 6 },
-    elevation: 8,
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 10,
     overflow: 'hidden',
   },
   listCard: {
-    width: 150,
-    height: 190,
+    width: 160,
+    height: 220,
   },
   heroCard: {
     width: '100%',
-    height: 240,
+    height: 300,
   },
   image: {
     width: '100%',
@@ -114,46 +119,48 @@ const styles = StyleSheet.create({
   fallbackContainer: {
     width: '100%',
     height: '100%',
-    backgroundColor: '#1A1A1A',
+    backgroundColor: '#2C2C2E',
   },
   gradient: {
     position: 'absolute',
     left: 0,
     right: 0,
     bottom: 0,
-    height: '60%',
+    height: '70%',
   },
   labelContainer: {
     position: 'absolute',
     top: 12,
     left: 12,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 4,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
   },
   dynamicLabel: {
     color: '#FFFFFF',
-    fontSize: 10,
-    opacity: 0.9,
-    letterSpacing: 1,
-    fontWeight: '800',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    textTransform: 'uppercase',
   },
   content: {
     position: 'absolute',
     bottom: 0,
     left: 0,
     right: 0,
-    padding: 12,
+    padding: 16,
   },
   caption: {
     color: '#FFFFFF',
-    fontSize: 14,
-    fontWeight: '500',
+    fontSize: 15,
+    lineHeight: 20,
+    fontWeight: '600',
   },
   heroCaption: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 22,
+    lineHeight: 28,
+    fontWeight: '800',
   },
 });
 

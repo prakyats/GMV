@@ -14,26 +14,38 @@ import { MainStackParamList } from '../navigation/types';
 import { useAuthStore } from '../store/authStore';
 import { Memory, toggleReaction } from '../services/memoryService';
 import MemoryReactions, { EMOJIS } from './MemoryReactions';
+import { ScalePressable } from './common/ScalePressable';
+import { FadeInStagger } from './common/FadeInStagger';
+import { triggerHaptic } from '../utils/haptics';
 
 type NavigationProp = NativeStackNavigationProp<MainStackParamList>;
 
 interface MemoryCardProps {
   memory: Memory;
   vaultId: string;
+  index: number;
 }
 
 /**
  * MemoryCard
  * Refactored to support long-press reaction picker.
  */
-const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId }) => {
+const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId, index }) => {
   const navigation = useNavigation<NavigationProp>();
   const { user } = useAuthStore();
   const [openPicker, setOpenPicker] = useState(false);
   const [touchPos, setTouchPos] = useState({ x: 0, y: 0 });
 
   const handleNavigate = () => {
+    // Immediate navigation for zero lag perception
     navigation.navigate('MemoryDetail', { memoryId: memory.id, vaultId });
+  };
+
+  const handleLongPress = (e: any) => {
+    const { pageX = 0, pageY = 0 } = e.nativeEvent || {};
+    setTouchPos({ x: pageX, y: pageY });
+    setOpenPicker(true);
+    triggerHaptic('light'); // Controlled tactile click
   };
 
   // --- DATE HANDLING ---
@@ -43,101 +55,101 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId }) => {
     : new Date();
 
   return (
-    <TouchableOpacity 
-      activeOpacity={0.9} 
-      onPress={handleNavigate}
-      onLongPress={(e) => {
-        const { pageX = 0, pageY = 0 } = e.nativeEvent || {};
-        setTouchPos({ x: pageX, y: pageY });
-        setOpenPicker(true);
-      }}
-      delayLongPress={250}
-      style={styles.card}
-    >
-      {memory.imageURL && (
-        <Image 
-          source={{ uri: memory.imageURL }} 
-          style={styles.image} 
-          resizeMode="cover"
-        />
-      )}
-      
-      <View style={styles.content}>
-        {memory.caption ? (
-          <Text style={styles.text} numberOfLines={3}>{memory.caption}</Text>
-        ) : null}
-        
-        <View style={styles.footer}>
-          <Text style={styles.poster}>
-            {memory.createdBy.id === user?.uid 
-              ? "You" 
-              : (memory.createdBy.name?.trim() || "Member")}
-          </Text>
-          <Text style={styles.date}>{dateObj.toDateString()}</Text>
-        </View>
+    <FadeInStagger index={index}>
+      <ScalePressable 
+        onPress={handleNavigate}
+        onLongPress={handleLongPress}
+        style={styles.card}
+      >
+        <View>
+          {memory.imageURL && (
+            <Image 
+              source={{ uri: memory.imageURL }} 
+              style={styles.image} 
+              resizeMode="cover"
+            />
+          )}
+          
+          <View style={styles.content}>
+            {memory.caption ? (
+              <Text style={styles.text} numberOfLines={3}>{memory.caption}</Text>
+            ) : null}
+            
+            <View style={styles.footer}>
+              <Text style={styles.poster}>
+                {memory.createdBy.id === user?.uid 
+                  ? "You" 
+                  : (memory.createdBy.name?.trim() || "Member")}
+              </Text>
+              <Text style={styles.date}>{dateObj.toDateString()}</Text>
+            </View>
 
-        {/* REACTION SYSTEM */}
-        <View style={styles.reactionContainer}>
-          <MemoryReactions 
-            vaultId={vaultId} 
-            memoryId={memory.id} 
-            reactions={memory.reactions}
-            openPicker={openPicker}
-            onClosePicker={() => setOpenPicker(false)}
-            touchPosition={touchPos}
-          />
+            {/* REACTION SYSTEM */}
+            <View style={styles.reactionContainer}>
+              <MemoryReactions 
+                vaultId={vaultId} 
+                memoryId={memory.id} 
+                reactions={memory.reactions}
+                openPicker={openPicker}
+                onClosePicker={() => setOpenPicker(false)}
+                touchPosition={touchPos}
+              />
+            </View>
+          </View>
         </View>
-      </View>
-    </TouchableOpacity>
+      </ScalePressable>
+    </FadeInStagger>
   );
 };
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: '#1C1C1E',
-    borderRadius: 12,
+    backgroundColor: '#1C1C1E', // System Background Secondary
+    width: '92%', // Leave space for margins
+    alignSelf: 'center',
     marginBottom: 20,
+    borderRadius: 20, // More pronounced rounding
     overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#38383A',
   },
   image: {
     width: '100%',
-    height: 200,
+    height: 280, // Slightly taller for more presence
     backgroundColor: '#2C2C2E',
   },
   content: {
-    padding: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
   },
   text: {
     color: '#FFFFFF',
-    fontSize: 16,
-    lineHeight: 22,
-    marginBottom: 12,
+    fontSize: 17,
+    lineHeight: 24,
+    fontWeight: '400',
+    marginBottom: 12, // More air between text and footer
   },
   footer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   date: {
     color: '#8E8E93',
-    fontSize: 12,
-    fontWeight: '500',
+    fontSize: 13,
+    fontWeight: '400',
+    marginLeft: 8,
   },
   poster: {
-    color: '#6C63FF',
-    fontSize: 12,
+    color: '#8E8E93',
+    fontSize: 13,
     fontWeight: '600',
   },
   reactionContainer: {
-    marginTop: 4,
-    borderTopWidth: 1,
-    borderTopColor: '#2C2C2E',
-    paddingTop: 12,
+    marginTop: 0,
+    paddingTop: 8,
   },
-  // PICKER STYLES
+  // PICKER STYLES (Keep existing logic but refine container)
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.4)',
@@ -151,7 +163,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderRadius: 30,
     alignItems: 'center',
-    // Shadow / Elevation
     elevation: 5,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   View, 
   Text, 
@@ -6,15 +6,22 @@ import {
   TouchableOpacity, 
   TextInput, 
   ActivityIndicator,
-  ScrollView
+  ScrollView,
+  Pressable,
+  Platform,
+  Animated,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { ScalePressable } from '../../components';
+import { ANIMATION } from '../../constants/theme';
+import { triggerHaptic } from '../../utils/haptics';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Clipboard from 'expo-clipboard';
 import { useAuthStore } from '../../store/authStore';
 import { useVaultStore } from '../../store/vaultStore';
 import { createVault, getUserVaults, joinVault } from '../../services/vaultService';
 import { VaultStackParamList } from '../../navigation/types';
+import { Ionicons } from '@expo/vector-icons';
 
 type VaultListNavigationProp = NativeStackNavigationProp<VaultStackParamList, 'VaultList'>;
 
@@ -22,6 +29,28 @@ const VaultListScreen = () => {
   const { user } = useAuthStore();
   const { setCurrentVault } = useVaultStore();
   const navigation = useNavigation<VaultListNavigationProp>();
+  const scrollRef = React.useRef<ScrollView>(null);
+
+  // ─── Animation state ──────────────────────────────────────────────────────
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const fabScale = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    // Screen Fade-in
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: ANIMATION.FADE_DURATION,
+      useNativeDriver: true,
+    }).start();
+
+    // FAB Scale-in
+    Animated.spring(fabScale, {
+      toValue: 1,
+      ...ANIMATION.PRESS_SPRING,
+      delay: 300,
+      useNativeDriver: true,
+    }).start();
+  }, [fadeAnim, fabScale]);
 
   const [vaults, setVaults] = useState<any[]>([]);
   const [isCreating, setIsCreating] = useState(false);
@@ -29,18 +58,40 @@ const VaultListScreen = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Join Vault State
   const [joinCode, setJoinCode] = useState('');
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
 
+  // ─── Native Header Config ──────────────────────────────────────────────
+  React.useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <ScalePressable 
+          onPress={() => {
+            const nextState = !isCreating;
+            setIsCreating(nextState);
+            setError(null);
+            if (nextState) {
+              scrollRef.current?.scrollTo({ y: 0, animated: true });
+            }
+          }}
+          useOpacity={true}
+        >
+          <Ionicons 
+            name={isCreating ? "close-circle" : "add-circle"} 
+            size={28} 
+            color="#6C63FF" 
+          />
+        </ScalePressable>
+      ),
+    });
+  }, [navigation, isCreating]);
+
   const fetchVaults = async () => {
     if (!user?.uid) return;
-    
     try {
       setLoading(true);
       setError(null);
-
       const data = await getUserVaults(user.uid);
       setVaults(data);
     } catch (err) {
@@ -56,17 +107,13 @@ const VaultListScreen = () => {
 
   const handleCreateVault = async () => {
     if (loading || !user) return;
-
     try {
       setLoading(true);
       setError(null);
-
-      await createVault(vaultName, user.uid);
-
+      const userName = user.displayName || user.email || 'Member';
+      await createVault(vaultName, user.uid, userName);
       setVaultName('');
       setIsCreating(false);
-      
-      // Refresh list after creation
       await fetchVaults();
     } catch (err: any) {
       setError(err.message || "Failed to create vault");
@@ -76,18 +123,8 @@ const VaultListScreen = () => {
   };
 
   const handleJoinVault = async () => {
-    if (joining) return;
-
-    // 1. Auth Check
-    if (!user?.uid) {
-      setJoinError("User not authenticated");
-      return;
-    }
-
-    // 2. Sanitization
+    if (joining || !user?.uid) return;
     const code = joinCode.trim().toUpperCase();
-
-    // 3. Size Validation (Pre-Check)
     if (code.length !== 6) {
       setJoinError("Enter a valid 6-character code");
       return;
@@ -96,17 +133,10 @@ const VaultListScreen = () => {
     try {
       setJoining(true);
       setJoinError(null);
-
-      // 4. API Call
-      await joinVault(code, user.uid);
-
-      // 5. Success Flow
+      const userName = user.displayName || user.email || 'Member';
+      await joinVault(code, user.uid, userName);
       setJoinCode('');
-      
-      if (user?.uid) {
-        await fetchVaults();
-      }
-
+      await fetchVaults();
     } catch (err: any) {
       setJoinError(err.message || "Failed to join vault");
     } finally {
@@ -115,13 +145,8 @@ const VaultListScreen = () => {
   };
 
   const handleVaultPress = (vault: any) => {
-    // 1. Guard
     if (!vault?.id) return;
-
-    // 2. Safe State Set
     setCurrentVault(vault.id, vault.members || []);
-
-    // 3. Navigation
     navigation.navigate("VaultDetail", {
       vaultId: vault.id,
       vaultName: vault.name,
@@ -129,129 +154,114 @@ const VaultListScreen = () => {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Your Vaults</Text>
-        <TouchableOpacity 
-          style={styles.addButton}
-          onPress={() => {
-            setIsCreating(!isCreating);
-            setError(null);
-          }}
-        >
-          <Text style={styles.addButtonText}>{isCreating ? 'Cancel' : 'Create Vault'}</Text>
-        </TouchableOpacity>
-      </View>
-
-      {isCreating && (
-        <View style={styles.creationCard}>
-          <TextInput
-            style={styles.input}
-            placeholder="Vault Name (e.g., Family Docs)"
-            placeholderTextColor="#8E8E93"
-            value={vaultName}
-            onChangeText={(text) => {
-              setVaultName(text);
-              if (error) setError(null);
-            }}
-            autoFocus
-          />
-          {error && <Text style={styles.errorText}>{error}</Text>}
-          <TouchableOpacity 
-            style={[
-              styles.submitButton, 
-              (loading || !vaultName.trim()) && styles.buttonDisabled
-            ]}
-            onPress={handleCreateVault}
-            disabled={loading || !vaultName.trim()}
-          >
-            {loading ? (
-              <ActivityIndicator color="#FFFFFF" />
-            ) : (
-              <Text style={styles.submitButtonText}>Confirm Creation</Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {/* Join Vault UI */}
-      <View style={styles.joinSection}>
-        <TextInput
-          style={styles.joinInput}
-          placeholder="Enter 6-character invite code"
-          placeholderTextColor="#8E8E93"
-          value={joinCode}
-          onChangeText={(text) => {
-            setJoinCode(text.toUpperCase());
-            if (joinError) setJoinError(null);
-          }}
-          maxLength={6}
-          autoCapitalize="characters"
-        />
-        
-        <TouchableOpacity 
-          style={[
-            styles.joinButton, 
-            (joining || joinCode.trim().length !== 6) && styles.buttonDisabled
-          ]}
-          onPress={handleJoinVault}
-          disabled={joining || joinCode.trim().length !== 6}
-        >
-          {joining ? (
-            <ActivityIndicator color="#FFFFFF" />
-          ) : (
-            <Text style={styles.joinButtonText}>Join Vault</Text>
-          )}
-        </TouchableOpacity>
-        
-        {joinError && <Text style={styles.joinErrorText}>{joinError}</Text>}
-      </View>
-
-      {loading && vaults.length === 0 ? (
-        <View style={styles.centerContainer}>
-          <ActivityIndicator size="large" color="#6C63FF" />
-        </View>
-      ) : error ? (
-        <View style={styles.centerContainer}>
-          <Text style={styles.errorText}>Failed to load vaults</Text>
-        </View>
-      ) : vaults.length === 0 && !isCreating ? (
-        <View style={styles.emptyContainer}>
-          <Text style={styles.emptyText}>No vaults yet. Create your first vault 🚀</Text>
-        </View>
-      ) : (
-        <ScrollView style={styles.list}>
-          {vaults.map((vault, index) => (
+    <Animated.View style={[styles.container, { opacity: fadeAnim }]}>
+      <ScrollView 
+        ref={scrollRef}
+        style={styles.list} 
+        contentContainerStyle={styles.scrollContent}
+        contentInsetAdjustmentBehavior="automatic"
+      >
+        {isCreating && (
+          <View style={styles.creationCard}>
+            <Text style={styles.sectionHeader}>NAME YOUR NEW VAULT</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="e.g. Summer Trip 2024"
+              placeholderTextColor="#8E8E93"
+              value={vaultName}
+              onChangeText={(text) => {
+                setVaultName(text);
+                if (error) setError(null);
+              }}
+              autoFocus
+            />
+            {error && <Text style={styles.errorText}>{error}</Text>}
             <TouchableOpacity 
-              key={vault.id} 
-              style={styles.vaultItem}
-              onPress={() => handleVaultPress(vault)}
-              activeOpacity={0.7}
+              style={[
+                styles.submitButton, 
+                (loading || !vaultName.trim()) && styles.buttonDisabled
+              ]}
+              onPress={handleCreateVault}
+              disabled={loading || !vaultName.trim()}
             >
-              <Text style={styles.vaultName}>
-                {index + 1}. {vault.name}
-              </Text>
-              
-              {vault.inviteCode && (
-                <>
-                  <Text style={styles.inviteCodeText}>
-                    Code: {vault.inviteCode}
-                  </Text>
-                  <TouchableOpacity 
-                    onPress={() => Clipboard.setStringAsync(vault.inviteCode)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.copyText}>
-                      Tap to copy code
-                    </Text>
-                  </TouchableOpacity>
-                </>
+              {loading ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.submitButtonText}>Create Vault</Text>
               )}
             </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
-    </View>
+          </View>
+        )}
+
+        <View style={styles.joinSection}>
+          <Text style={styles.sectionHeader}>HAVE AN INVITE CODE?</Text>
+          <View style={styles.joinInputRow}>
+            <TextInput
+              style={[styles.joinInput, { flex: 1 }]}
+              placeholder="ABC123"
+              placeholderTextColor="#8E8E93"
+              value={joinCode}
+              onChangeText={(text) => {
+                setJoinCode(text.toUpperCase());
+                if (joinError) setJoinError(null);
+              }}
+              maxLength={6}
+              autoCapitalize="characters"
+            />
+            <TouchableOpacity 
+              style={[
+                styles.joinButton, 
+                (joining || joinCode.trim().length !== 6) && styles.buttonDisabled
+              ]}
+              onPress={handleJoinVault}
+              disabled={joining || joinCode.trim().length !== 6}
+            >
+              {joining ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Ionicons name="arrow-forward-circle" size={32} color="#6C63FF" />
+              )}
+            </TouchableOpacity>
+          </View>
+          {joinError && <Text style={styles.joinErrorText}>{joinError}</Text>}
+        </View>
+
+        <Text style={styles.sectionHeader}>YOUR ACTIVE VAULTS</Text>
+        {loading && vaults.length === 0 ? (
+          <ActivityIndicator size="small" color="#6C63FF" style={{ marginTop: 20 }} />
+        ) : vaults.length === 0 ? (
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyText}>No vaults found. Create or join one to start sharing memories.</Text>
+          </View>
+        ) : (
+          <View style={styles.vaultListContainer}>
+            {vaults.map((vault, index) => (
+              <ScalePressable 
+                key={vault.id} 
+                style={[
+                  styles.vaultItem,
+                  index === vaults.length - 1 && { borderBottomWidth: 0 }
+                ]}
+                onPress={() => handleVaultPress(vault)}
+              >
+                <View style={styles.vaultItemContent}>
+                  <View style={styles.vaultIconContainer}>
+                    <Ionicons name="cube-outline" size={24} color="#6C63FF" />
+                  </View>
+                  <View style={styles.vaultInfo}>
+                    <Text style={styles.vaultName}>{vault.name}</Text>
+                    {vault.inviteCode && (
+                      <Text style={styles.inviteCodeText}>Code: {vault.inviteCode}</Text>
+                    )}
+                  </View>
+                  <Ionicons name="chevron-forward" size={20} color="#38383A" />
+                </View>
+              </ScalePressable>
+            ))}
+          </View>
+        )}
+      </ScrollView>
+    </Animated.View>
   );
 };
 
@@ -259,144 +269,146 @@ const VaultListScreen = () => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0B0B0B',
-    padding: 24,
-    paddingTop: 60,
+    backgroundColor: '#000000',
   },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 32,
+  list: {
+    flex: 1,
   },
-  title: {
-    color: '#FFFFFF',
-    fontSize: 24,
-    fontWeight: '700',
-  },
-  addButton: {
-    backgroundColor: '#1C1C1E',
+  scrollContent: {
+    paddingTop: Platform.OS === 'ios' ? 140 : 20, 
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
+    paddingBottom: 100, // Space for tab bar
   },
-  addButtonText: {
-    color: '#6C63FF',
-    fontSize: 14,
-    fontWeight: '600',
+  sectionHeader: {
+    fontSize: 13,
+    color: '#8E8E93',
+    fontWeight: '400',
+    marginBottom: 8,
+    marginLeft: 16,
+    textTransform: 'uppercase',
   },
+  headerAction: {
+    marginRight: 8,
+  },
+  // GROUPED LAYOUTS
   creationCard: {
     backgroundColor: '#1C1C1E',
-    padding: 20,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
+    borderRadius: 10,
+    padding: 16,
     marginBottom: 24,
   },
-  input: {
-    backgroundColor: '#0B0B0B',
+  joinSection: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 10,
+    padding: 16,
+    marginBottom: 32,
+  },
+  vaultListContainer: {
+    backgroundColor: '#1C1C1E',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  // ROWS
+  vaultItem: {
+    backgroundColor: '#1C1C1E',
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: '#38383A',
+  },
+  vaultItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    paddingRight: 16,
+  },
+  vaultIconContainer: {
+    width: 36,
+    height: 36,
     borderRadius: 8,
-    height: 48,
-    paddingHorizontal: 16,
+    backgroundColor: 'rgba(108, 99, 255, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  vaultInfo: {
+    flex: 1,
+  },
+  // INPUTS
+  input: {
+    backgroundColor: '#2C2C2E',
+    borderRadius: 8,
+    height: 44,
+    paddingHorizontal: 12,
     color: '#FFFFFF',
-    fontSize: 16,
-    marginBottom: 16,
+    fontSize: 17,
+    marginTop: 8,
   },
-  errorText: {
-    color: '#FF453A',
-    fontSize: 12,
-    marginBottom: 16,
+  joinInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
   },
+  joinInput: {
+    backgroundColor: '#2C2C2E',
+    borderRadius: 8,
+    height: 44,
+    paddingHorizontal: 12,
+    color: '#FFFFFF',
+    fontSize: 17,
+    marginRight: 12,
+  },
+  // BUTTONS
   submitButton: {
     backgroundColor: '#6C63FF',
-    height: 48,
+    height: 44,
     borderRadius: 8,
     justifyContent: 'center',
     alignItems: 'center',
+    marginTop: 16,
   },
   buttonDisabled: {
     opacity: 0.5,
   },
   submitButtonText: {
     color: '#FFFFFF',
-    fontSize: 15,
+    fontSize: 17,
     fontWeight: '600',
   },
-  centerContainer: {
-    flex: 1,
+  joinButton: {
     justifyContent: 'center',
     alignItems: 'center',
   },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingBottom: 100,
-  },
-  emptyText: {
-    color: '#8E8E93',
-    fontSize: 16,
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  list: {
-    flex: 1,
-  },
-  vaultItem: {
-    padding: 12,
-    borderBottomWidth: 1,
-    borderColor: '#222',
-  },
+  // TEXT
   vaultName: {
     color: '#FFFFFF',
-    fontSize: 16,
+    fontSize: 17,
+    fontWeight: '400',
   },
   inviteCodeText: {
     color: '#8E8E93',
-    fontSize: 14,
-    marginTop: 4,
+    fontSize: 13,
+    marginTop: 2,
   },
-  copyText: {
-    color: '#6C63FF',
-    fontSize: 14,
-    fontWeight: '600',
-    marginTop: 4,
-  },
-  joinSection: {
-    backgroundColor: '#1C1C1E',
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#2C2C2E',
-    marginBottom: 24,
-  },
-  joinInput: {
-    backgroundColor: '#0B0B0B',
-    borderRadius: 8,
-    height: 48,
-    paddingHorizontal: 16,
-    color: '#FFFFFF',
-    fontSize: 16,
-    marginBottom: 12,
-  },
-  joinButton: {
-    backgroundColor: '#6C63FF',
-    height: 48,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  joinButtonText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: '600',
+  errorText: {
+    color: '#FF453A',
+    fontSize: 13,
+    marginTop: 8,
+    marginLeft: 4,
   },
   joinErrorText: {
     color: '#FF453A',
-    fontSize: 12,
+    fontSize: 13,
     marginTop: 8,
+    marginLeft: 4,
+  },
+  emptyContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  emptyText: {
+    color: '#8E8E93',
+    fontSize: 15,
+    textAlign: 'center',
+    lineHeight: 22,
   },
 });
 
