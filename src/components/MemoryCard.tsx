@@ -1,17 +1,19 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   View, 
   Text, 
   StyleSheet, 
   Image, 
-  TouchableOpacity 
+  TouchableOpacity,
+  Modal,
+  Pressable
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { VaultStackParamList, MainStackParamList } from '../navigation/types';
+import { MainStackParamList } from '../navigation/types';
 import { useAuthStore } from '../store/authStore';
-import { Memory } from '../services/memoryService';
-import MemoryReactions from './MemoryReactions';
+import { Memory, toggleReaction } from '../services/memoryService';
+import MemoryReactions, { EMOJIS } from './MemoryReactions';
 
 type NavigationProp = NativeStackNavigationProp<MainStackParamList>;
 
@@ -22,27 +24,34 @@ interface MemoryCardProps {
 
 /**
  * MemoryCard
- * A performance-optimized, reusable component for rendering memories in a feed.
- * Wrap in React.memo to prevent unnecessary re-renders during list scrolling.
+ * Refactored to support long-press reaction picker.
  */
 const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId }) => {
   const navigation = useNavigation<NavigationProp>();
   const { user } = useAuthStore();
+  const [openPicker, setOpenPicker] = useState(false);
+  const [touchPos, setTouchPos] = useState({ x: 0, y: 0 });
 
-  const handlePress = () => {
+  const handleNavigate = () => {
     navigation.navigate('MemoryDetail', { memoryId: memory.id, vaultId });
   };
 
   // --- DATE HANDLING ---
-  const displayDate = memory.memoryDate ?? memory.createdAt ?? new Date();
+  const displayDate = memory.memoryDate ?? memory.createdAt;
   const dateObj = displayDate && typeof displayDate === 'object' && 'seconds' in displayDate
     ? new Date(displayDate.seconds * 1000)
-    : new Date(displayDate as any);
+    : new Date();
 
   return (
     <TouchableOpacity 
-      activeOpacity={0.7} 
-      onPress={handlePress}
+      activeOpacity={0.9} 
+      onPress={handleNavigate}
+      onLongPress={(e) => {
+        const { pageX = 0, pageY = 0 } = e.nativeEvent || {};
+        setTouchPos({ x: pageX, y: pageY });
+        setOpenPicker(true);
+      }}
+      delayLongPress={250}
       style={styles.card}
     >
       {memory.imageURL && (
@@ -73,6 +82,9 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId }) => {
             vaultId={vaultId} 
             memoryId={memory.id} 
             reactions={memory.reactions}
+            openPicker={openPicker}
+            onClosePicker={() => setOpenPicker(false)}
+            touchPosition={touchPos}
           />
         </View>
       </View>
@@ -124,6 +136,33 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#2C2C2E',
     paddingTop: 12,
+  },
+  // PICKER STYLES
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  pickerContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#2C2C2E',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 30,
+    alignItems: 'center',
+    // Shadow / Elevation
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  pickerButton: {
+    marginHorizontal: 8,
+  },
+  pickerEmoji: {
+    fontSize: 26,
   }
 });
 
