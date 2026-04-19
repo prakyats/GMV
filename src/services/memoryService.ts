@@ -109,7 +109,7 @@ export async function addMemory(
   }
 
   const finalCaption = payload.caption.trim();
-  if (!finalCaption) {
+  if (!finalCaption && payload.type !== 'image') {
     throw new Error("Memory caption cannot be empty");
   }
   if (finalCaption.length >= 500) {
