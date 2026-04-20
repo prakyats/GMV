@@ -6,6 +6,7 @@ import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '@/services/firebase';
 import { useAuthStore } from '../store/authStore';
+import { useUserStore } from '../store/userStore';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import BottomTabNavigator from './BottomTabNavigator';
 import AuthNavigator from './AuthNavigator';
@@ -95,6 +96,7 @@ const AppNavigator = () => {
         });
       } else {
         setUser(null);
+        useUserStore.getState().clearUsers();
       }
 
       setLoading(false);

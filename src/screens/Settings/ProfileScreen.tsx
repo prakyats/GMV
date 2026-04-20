@@ -9,19 +9,24 @@ import {
   TextInput, 
   TouchableOpacity, 
   ActivityIndicator, 
-  Alert 
+  Alert,
+  Image
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { authService } from '../../services/authService';
 import { useVaultStore } from '../../store/vaultStore';
 import { useAuthStore } from '../../store/authStore';
 import { useUIStore } from '../../store/uiStore';
-import { ScalePressable } from '../../components';
+import { ScalePressable, MemberAvatar } from '../../components';
 import { ANIMATION } from '../../constants/theme';
-import { getUserInitial, formatUserDisplayName, getUserDisplayName } from '../../utils/user';
+import { formatUserDisplayName } from '../../utils/user';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { SettingsStackParamList } from '../../navigation/types';
+import { useNavigation } from '@react-navigation/native';
 
 const ProfileScreen = () => {
   const { user, isDeletingAccount } = useAuthStore();
+  const navigation = useNavigation<NativeStackNavigationProp<SettingsStackParamList>>();
   const fadeAnim = useRef(new Animated.Value(0)).current;
 
   // Deletion state
@@ -32,6 +37,10 @@ const ProfileScreen = () => {
 
   // Logout state
   const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  const handleEditProfile = () => {
+    navigation.navigate('EditProfile');
+  };
 
   useEffect(() => {
     Animated.timing(fadeAnim, {
@@ -116,11 +125,15 @@ const ProfileScreen = () => {
       contentInsetAdjustmentBehavior="automatic"
     >
       <View style={styles.profileHeader}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>
-            {getUserInitial(user)}
-          </Text>
+        <View style={styles.avatarWrapper}>
+          <MemberAvatar 
+            member={{ id: user?.uid || '', name: user?.displayName || 'User', photoURL: user?.photoURL }}
+            isCurrentUser={true}
+            isOwner={false}
+            size={80}
+          />
         </View>
+
         <Text style={styles.userName}>{formatUserDisplayName(user)}</Text>
         <Text style={styles.userEmail}>{user?.email}</Text>
       </View>
@@ -130,7 +143,7 @@ const ProfileScreen = () => {
         <SettingRow 
           icon="person-outline" 
           label="Edit Profile" 
-          onPress={() => {}} 
+          onPress={handleEditProfile} 
         />
         <SettingRow 
           icon="notifications-outline" 
@@ -251,7 +264,12 @@ const styles = StyleSheet.create({
   },
   profileHeader: {
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 32,
+  },
+  avatarWrapper: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   avatar: {
     width: 80,
@@ -269,11 +287,80 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: '700',
   },
-  userName: {
+  avatarImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 40,
+  },
+  editBadge: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#6C63FF',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#000000',
+  },
+  editNameIcon: {
+    marginLeft: 8,
+    padding: 4,
+  },
+  editNameContainer: {
+    alignItems: 'center',
+    marginBottom: 12,
+    width: '80%',
+  },
+  editNameInput: {
+    width: '100%',
+    backgroundColor: '#1C1C1E',
+    borderRadius: 12,
+    padding: 12,
     color: '#FFFFFF',
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 18,
+    textAlign: 'center',
+    borderWidth: 1,
+    borderColor: '#38383A',
+  },
+  saveEditButton: {
+    backgroundColor: '#6C63FF',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flex: 1,
+    alignItems: 'center',
+  },
+  saveEditButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  cancelEditButton: {
+    backgroundColor: '#2C2C2E',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    flex: 1,
+    alignItems: 'center',
+  },
+  cancelEditButtonText: {
+    color: '#FFFFFF',
+    fontWeight: '600',
+  },
+  nameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 4,
+  },
+  userName: {
+    marginTop: 12,
+    color: '#FFFFFF',
+    fontSize: 24,
+    fontWeight: '700',
+    textAlign: 'center',
   },
   userEmail: {
     color: '#8E8E93',

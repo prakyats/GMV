@@ -14,7 +14,7 @@ import {
   Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { ScalePressable } from '../../components';
+import { ScalePressable, MemberAvatar } from '../../components';
 import { ANIMATION } from '../../constants/theme';
 import { triggerHaptic } from '../../utils/haptics';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -277,6 +277,7 @@ const VaultListScreen = () => {
                       </TouchableOpacity>
                     )}
                   </View>
+
                   <Ionicons name="chevron-forward" size={20} color="#38383A" />
                 </View>
               </ScalePressable>
@@ -354,6 +355,33 @@ const styles = StyleSheet.create({
   },
   vaultInfo: {
     flex: 1,
+    marginRight: 8,
+  },
+  avatarStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: 8,
+  },
+  stackedAvatar: {
+    borderWidth: 2,
+    borderColor: '#1C1C1E',
+    borderRadius: 14,
+  },
+  moreMembers: {
+    backgroundColor: '#2C2C2E',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: -8,
+    borderWidth: 1,
+    borderColor: '#38383A',
+  },
+  moreMembersText: {
+    color: '#8E8E93',
+    fontSize: 10,
+    fontWeight: '600',
   },
   // INPUTS
   input: {
