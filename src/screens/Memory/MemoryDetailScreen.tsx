@@ -1,4 +1,5 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { 
   View, 
   Text, 
@@ -34,18 +35,32 @@ type MemoryDetailRouteProp = RouteProp<MainStackParamList, 'MemoryDetail'>;
 const MemoryDetailScreen = () => {
   const route = useRoute<MemoryDetailRouteProp>();
   const navigation = useNavigation();
-  const { memoryId, vaultId } = route.params;
+  const { memoryId, vaultId, memory: initialMemory } = route.params;
   const { user, isDeletingAccount } = useAuthStore();
   
   // --- Core State ---
-  const [memory, setMemory] = useState<Memory | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [memory, setMemory] = useState<Memory | null>(initialMemory || null);
+  
+  // Guard: If we have partial image data but no URL, we must keep loading
+  const isImageReady = memory?.type === "image" && !!memory?.imageURL;
+  const shouldKeepLoading = !memory || (memory.type === "image" && !memory.imageURL);
+  
+  const [loading, setLoading] = useState(shouldKeepLoading);
   const [error, setError] = useState(false);
   const [openPicker, setOpenPicker] = useState(false);
   const [touchPos, setTouchPos] = useState({ x: 0, y: 0 });
   const [hasAnimated, setHasAnimated] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+
+  // DEBUG LOGS (Temporary)
+  useEffect(() => {
+    console.log("🧠 Memory received:", memory?.id);
+    console.log("🧩 Memory type:", memory?.type);
+    console.log("🖼️ Image URL:", memory?.imageURL ? "Exists" : "Missing");
+    console.log("⏳ Loading state:", loading);
+    console.log("🛡️ Should keep loading:", shouldKeepLoading);
+  }, [memory, loading, shouldKeepLoading]);
 
   // --- Animation Refs ---
   const imageFade = useRef(new Animated.Value(0)).current;
@@ -145,37 +160,50 @@ const MemoryDetailScreen = () => {
     }
   };
 
-  // --- Real-time Sync ---
-  useEffect(() => {
-    if (!vaultId || !memoryId) return;
-    
-    setLoading(true);
-    const unsubscribe = subscribeToMemory(
-      vaultId, 
-      memoryId, 
-      (data) => {
-        if (hasExitedRef.current || isDeletingAccount) {
-          safeExit();
-          return;
-        }
-        if (!data) {
-          setError(true);
-        } else {
-          setMemory(data);
-          setError(false);
-        }
-        setLoading(false);
-      },
-      (error) => {
-        if (error.code === 'permission-denied' || isDeletingAccount) {
-          safeExit();
-          return;
-        }
-      }
-    );
+   useEffect(() => {
+     if (!vaultId || !memoryId) return;
+     
+     const unsubscribe = subscribeToMemory(
+       vaultId, 
+       memoryId, 
+       (data) => {
+         if (hasExitedRef.current || isDeletingAccount) {
+           safeExit();
+           return;
+         }
+         
+         if (!data) {
+           console.log("❌ Document not found or was deleted");
+           setMemory(null);
+           setLoading(false);
+           setError(true);
+           return;
+         }
 
-    return () => unsubscribe();
-  }, [memoryId, vaultId, isDeletingAccount, safeExit]);
+         // HARD GUARD: For image memories, do not stop loading until imageURL exists
+         if (data.type === "image" && !data.imageURL) {
+           console.log("⏳ Image URL still missing in Firestore, staying in loading state...");
+           setMemory(data);
+           setLoading(true);
+           // Show non-blocking toast for long-polling feedback
+           useUIStore.getState().showToast("Loading image...");
+           return;
+         }
+ 
+         setMemory(data);
+         setLoading(false);
+         setError(false);
+       },
+       (error) => {
+         if (error.code === 'permission-denied' || isDeletingAccount) {
+           safeExit();
+           return;
+         }
+       }
+     );
+ 
+     return () => unsubscribe();
+   }, [memoryId, vaultId, isDeletingAccount, safeExit]);
 
   // --- Header Config (DISABLED NATIVE HEADER) ---
   React.useLayoutEffect(() => {
@@ -219,16 +247,16 @@ const MemoryDetailScreen = () => {
     }, [vaultId, user, memoryId])
   );
 
-  // --- Render Guards ---
-  if (loading) {
-    return (
-      <View style={[styles.centered, { backgroundColor: '#000' }]}>
-        <ActivityIndicator size="large" color="#6C63FF" />
-      </View>
-    );
-  }
-
-  if (error || !memory) {
+   // --- Render Guards ---
+   if (loading || (memory?.type === "image" && !memory.imageURL)) {
+     return (
+       <View style={[styles.centered, { backgroundColor: '#000' }]}>
+         <ActivityIndicator size="large" color="#6C63FF" />
+       </View>
+     );
+   }
+ 
+   if (error || !memory) {
     return (
       <View style={[styles.centered, { backgroundColor: '#000' }]}>
         <Text style={styles.errorText}>This memory is no longer available</Text>

@@ -17,7 +17,7 @@ import {
   serverTimestamp,
   runTransaction
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db } from '@/services/firebase';
 import { useAuthStore } from '../store/authStore';
 import { useVaultStore } from '../store/vaultStore';
 import { generateInviteCode } from '../utils/inviteCode';

@@ -1,9 +1,10 @@
-import React, { useEffect } from 'react';
+import React from 'react';
+import { useEffect } from 'react';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { NavigationContainer, DarkTheme } from '@react-navigation/native';
 import { onAuthStateChanged } from 'firebase/auth';
-import { auth } from '../services/firebase';
+import { auth } from '@/services/firebase';
 import { useAuthStore } from '../store/authStore';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import BottomTabNavigator from './BottomTabNavigator';
@@ -13,6 +14,9 @@ import MemoryEntryScreen from '../screens/Public/MemoryEntryScreen';
 import { MainStackParamList } from './types';
 import ThemedAlert from '../components/common/ThemedAlert';
 import ThemedToast from '../components/common/ThemedToast';
+import * as RootNavigation from './RootNavigation';
+import * as Notifications from 'expo-notifications';
+import { handleNotificationNavigation, registerForPushNotifications, savePushToken } from '../services/notificationService';
 
 const AppTheme = {
   ...DarkTheme,
@@ -95,6 +99,34 @@ const AppNavigator = () => {
     return unsubscribe;
   }, [setUser, setLoading]);
 
+  useEffect(() => {
+    // 1. Initial listener for background/quit state notifications (Cold Start)
+    const checkInitialNotification = async () => {
+      try {
+        const response = await Notifications.getLastNotificationResponseAsync();
+        if (response) {
+          handleNotificationNavigation(response);
+        }
+      } catch (err) {
+        console.warn("Error checking initial notification:", err);
+      }
+    };
+
+    checkInitialNotification();
+
+    // 2. Listener for foreground/ongoing state notifications (Background/Foreground)
+    const subscription = Notifications.addNotificationResponseReceivedListener(handleNotificationNavigation);
+
+    // 3. Register for tokens if user is already logged in (persistence fallback)
+    if (user) {
+      registerForPushNotifications().then(token => {
+        if (token) savePushToken(user.uid, token);
+      });
+    }
+
+    return () => subscription.remove();
+  }, [user]);
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -106,7 +138,15 @@ const AppNavigator = () => {
   return (
     <SafeAreaProvider>
       <View style={{ flex: 1 }}>
-        <NavigationContainer theme={AppTheme} linking={linking}>
+        <NavigationContainer 
+          theme={AppTheme} 
+          linking={linking}
+          ref={RootNavigation.navigationRef}
+          onReady={() => {
+            console.log("🔍 Root navigator state:", JSON.stringify(RootNavigation.navigationRef.getRootState(), null, 2));
+            RootNavigation.flushNavigation();
+          }}
+        >
           {user ? <MainNavigator /> : <AuthNavigator />}
         </NavigationContainer>
 

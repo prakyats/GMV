@@ -1,5 +1,5 @@
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { storage } from './firebase';
+import { storage } from '@/services/firebase';
 import * as FileSystem from 'expo-file-system/legacy';
 
 const MAX_SIZE = 5 * 1024 * 1024; // 5MB limit

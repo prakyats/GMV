@@ -1,17 +1,18 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Animated } from 'react-native';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { getDocs, collection, query, where } from 'firebase/firestore';
-import { db } from '../../services/firebase';
-import { mapMemoryDoc, getAllUserMemories } from '../../services/memoryService';
-import { MainStackParamList } from '../../navigation/types';
-import { Memory } from '../../navigation/types';
-import { useAuthStore } from '../../store/authStore';
-import { getBestResurfacedMemory } from '../../algorithms/resurfaceEngine';
-import { getResurfacedMemories, DiscoveryBuckets } from '../../algorithms/discoveryEngine';
-import DiscoveryMemoryCard from '../../components/memory/DiscoveryMemoryCard';
-import { syncEngagementStats, EngagementStats } from '../../services/engagementService';
+import { db } from '@/services/firebase';
+import { mapMemoryDoc, getAllUserMemories } from '@/services/memoryService';
+import { MainStackParamList } from '@/navigation/types';
+import { Memory } from '@/navigation/types';
+import { useAuthStore } from '@/store/authStore';
+import { getBestResurfacedMemory } from '@/algorithms/resurfaceEngine';
+import { getResurfacedMemories, DiscoveryBuckets } from '@/algorithms/discoveryEngine';
+import DiscoveryMemoryCard from '@/components/memory/DiscoveryMemoryCard';
+import { syncEngagementStats, EngagementStats } from '@/services/engagementService';
 import { Ionicons } from '@expo/vector-icons';
 
 

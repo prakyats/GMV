@@ -19,6 +19,7 @@ import {
   InteractionManager,
   StatusBar,
   Easing,
+  AppState,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, CompositeNavigationProp } from '@react-navigation/native';
@@ -51,6 +52,9 @@ import {
   startAfter,
   limit,
   DocumentChange,
+  doc,
+  updateDoc,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { ImagePickerButton, MemoryCard, ScalePressable } from '../../components';
 import { compressImage } from '../../utils/imageCompressor';
@@ -74,7 +78,7 @@ const PAGE_SIZE = 15;
 const VaultDetailScreen = () => {
   const route = useRoute<VaultDetailRouteProp>();
   const navigation = useNavigation<VaultDetailNavigationProp>();
-  const { vaultId, vaultName } = route.params || {};
+  const { vaultId, vaultName, memoryId } = route.params || {};
   const { user, isDeletingAccount } = useAuthStore();
   const tabBarHeight = useBottomTabBarHeight();
 
@@ -108,6 +112,7 @@ const VaultDetailScreen = () => {
   // ─── Stability Guards (Production Hardened) ──────────────
   const hasExitedRef = useRef(false);
   const hasMountedRef = useRef(false);
+  const activeVaultSetRef = useRef(false);
 
   const safeExit = () => {
     if (hasExitedRef.current) return;
@@ -174,6 +179,66 @@ const VaultDetailScreen = () => {
         .catch(() => {}); // Non-critical — strip just stays empty
     }
   }, [fadeAnim, fabScale, vaultId]);
+  
+  // ─── Presence Tracking (Notification-Aware) ───────────────────────────
+  const clearActiveVault = async () => {
+    if (!user?.uid) return;
+    try {
+      await updateDoc(doc(db, "users", user.uid), {
+        activeVault: null
+      });
+      activeVaultSetRef.current = false;
+    } catch (err) {
+      console.warn("Presence: Clear failed", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!vaultId || !user?.uid) return;
+
+    const setActiveVault = async () => {
+      try {
+        await updateDoc(doc(db, "users", user.uid), {
+          activeVault: {
+            id: vaultId,
+            updatedAt: serverTimestamp()
+          }
+        });
+        activeVaultSetRef.current = true;
+      } catch (err) {
+        console.warn("Presence: Set failed", err);
+      }
+    };
+
+    setActiveVault();
+
+    // Clear on unmount
+    return () => {
+      clearActiveVault();
+    };
+  }, [vaultId, user?.uid]);
+
+  useEffect(() => {
+    // Clear on background to ensure user gets notifications when multi-tasking
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
+        clearActiveVault();
+      } else if (state === "active" && vaultId) {
+        // Re-set when coming back to the vault
+        if (!activeVaultSetRef.current) {
+          updateDoc(doc(db, "users", user!.uid), {
+            activeVault: {
+              id: vaultId,
+              updatedAt: serverTimestamp()
+            }
+          }).then(() => {
+            activeVaultSetRef.current = true;
+          }).catch(() => {});
+        }
+      }
+    });
+    return () => sub.remove();
+  }, [vaultId, user?.uid]);
 
   /**
    * Pagination cursor architecture (two separate refs):
@@ -304,6 +369,43 @@ const VaultDetailScreen = () => {
       unsubMemories();
     };
   }, [vaultId, user?.uid, isLeaving]);
+
+  // ─── Auto-Open Memory (Deep Link Hook) ────────────────────────────────────
+  useEffect(() => {
+    if (!memoryId || !memories.length) return;
+
+    console.log("🎯 Deep link detected for memory:", memoryId);
+    const start = Date.now();
+
+    const interval = setInterval(() => {
+      const target = memories.find(m => m.id === memoryId);
+
+      if (target) {
+        console.log("✅ Target memory found:", target.id);
+        clearInterval(interval);
+
+        // Open memory detail with full object for zero-flicker
+        navigation.navigate("MemoryDetail", { 
+          memoryId: target.id,
+          vaultId: vaultId!,
+          memory: target 
+        });
+
+        // Clear param so it doesn't reopen on back navigation
+        navigation.setParams({ memoryId: undefined });
+      }
+
+      // Fallback: 3s timeout
+      if (Date.now() - start > 3000) {
+        clearInterval(interval);
+        console.log("⚠️ Deep link timeout: memory not found in feed list");
+        // Clear param to avoid redundant checks
+        navigation.setParams({ memoryId: undefined });
+      }
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, [memoryId, memories, vaultId, navigation]);
 
   // ─── Pagination ───────────────────────────────────────────────────────────
   const loadMore = async () => {
