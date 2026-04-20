@@ -37,7 +37,7 @@ export type BottomTabParamList = {
 
 export type VaultStackParamList = {
   VaultList: undefined;
-  VaultDetail: { vaultId: string; vaultName: string };
+  VaultDetail: { vaultId: string; vaultName?: string; memoryId?: string };
   VaultMembers: { vaultId: string; vaultName: string; createdBy: string };
 };
 
@@ -47,6 +47,6 @@ export type ReliveStackParamList = {
 
 export type MainStackParamList = {
   Tabs: undefined;
-  MemoryDetail: { memoryId: string; vaultId: string };
+  MemoryDetail: { memoryId: string; vaultId: string; memory?: Memory };
   MemoryEntry: { vaultId: string; memoryId: string };
 };
