@@ -1,0 +1,21 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    // USERS PROFILE IMAGES
+    match /profileImages/{file} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+
+    // VAULT IMAGES
+    match /vaults/{vaultId}/{allPaths=**} {
+      allow read, write: if request.auth != null; // Keeping basic vault constraints for now
+    }
+
+    // DEFAULT SECURE EVERYTHING ELSE
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
