@@ -2,7 +2,7 @@ import 'dotenv/config';
 
 export default {
   expo: {
-    name: "echoes",
+    name: "Echoes",
     slug: "echoes",
     version: "1.0.0",
     orientation: "portrait",
