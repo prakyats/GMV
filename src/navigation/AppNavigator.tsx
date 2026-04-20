@@ -84,6 +84,8 @@ const AppNavigator = () => {
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
+      console.log("🔥 Auth state changed:", firebaseUser?.uid || null);
+
       if (firebaseUser) {
         setUser({
           uid: firebaseUser.uid,
@@ -94,8 +96,11 @@ const AppNavigator = () => {
       } else {
         setUser(null);
       }
+
       setLoading(false);
+      console.log("⏳ Auth loading: false");
     });
+
     return unsubscribe;
   }, [setUser, setLoading]);
 
