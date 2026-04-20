@@ -15,13 +15,16 @@ import {
   arrayUnion,
   getDoc,
   where,
-  deleteField
+  deleteField,
+  deleteDoc
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db } from '@/services/firebase';
 import { getUserVaults } from './vaultService';
 export { db };
 
 import { Memory, FirestoreTimestamp } from '../navigation/types';
+import { getUserDisplayName } from '../utils/user';
+import { useAuthStore } from '../store/authStore';
 export { Memory };
 
 /**
@@ -134,7 +137,10 @@ export async function addMemory(
     throw new Error("User must be a member of this vault to post");
   }
 
-  if (!payload.createdBy.name || payload.createdBy.name.trim() === '') {
+  // Clean and normalize creator name before write
+  if (payload.createdBy && typeof payload.createdBy === 'object') {
+    payload.createdBy.name = getUserDisplayName(payload.createdBy).trim();
+  } else {
     throw new Error("User name is required for attribution");
   }
 
@@ -177,7 +183,7 @@ export function mapMemoryDoc(docSnap: any): Memory {
   if (typeof d.createdBy === 'object' && d.createdBy !== null) {
     createdBy = {
       id: d.createdBy.id || 'unknown',
-      name: d.createdBy.name || 'Member',
+      name: d.createdBy.name?.trim() || 'Member',
     };
   } else {
     // Migration fallback for legacy non-object attribution
@@ -278,6 +284,12 @@ export function subscribeToMemories(
   limitCount: number = 15,
   onError?: (error: any) => void
 ) {
+  // 🚨 PRE-SUBSCRIBE GUARD
+  const initialAuth = useAuthStore.getState();
+  if (initialAuth.isDeletingAccount || !initialAuth.user) {
+    return () => {};
+  }
+
   const q = query(
     collection(db, 'vaults', vaultId, 'memories'),
     orderBy('memoryDate', 'desc'),
@@ -286,8 +298,19 @@ export function subscribeToMemories(
   );
 
   return onSnapshot(q, (snapshot) => {
+    // 🚨 GLOBAL HARD STOP
+    const { isDeletingAccount, user } = useAuthStore.getState();
+    if (isDeletingAccount || !user) return;
+
     onUpdate(snapshot.docs.map(mapMemoryDoc), snapshot);
   }, (error) => {
+    const { isDeletingAccount } = useAuthStore.getState();
+    
+    // 🚨 SILENT EXIT for auth-related teardown
+    if (isDeletingAccount || error.code === "permission-denied") {
+      return;
+    }
+
     console.error("Firestore Subscription Error:", error);
     if (onError) onError(error);
   });
@@ -316,12 +339,35 @@ export async function markMemoryViewed(
 export function subscribeToMemory(
   vaultId: string,
   memoryId: string,
-  onUpdate: (memory: Memory | null) => void
+  onUpdate: (memory: Memory | null) => void,
+  onError?: (error: any) => void
 ) {
+  // 🚨 PRE-SUBSCRIBE GUARD
+  const initialAuth = useAuthStore.getState();
+  if (initialAuth.isDeletingAccount || !initialAuth.user) {
+    return () => {};
+  }
+
   return onSnapshot(
     doc(db, 'vaults', vaultId, 'memories', memoryId),
-    (snap) => onUpdate(snap.exists() ? mapMemoryDoc(snap) : null),
-    (error) => console.error("Single Memory Subscription Error:", error)
+    (snap) => {
+      // 🚨 GLOBAL HARD STOP
+      const { isDeletingAccount, user } = useAuthStore.getState();
+      if (isDeletingAccount || !user) return;
+
+      onUpdate(snap.exists() ? mapMemoryDoc(snap) : null);
+    },
+    (error) => {
+      const { isDeletingAccount } = useAuthStore.getState();
+
+      // 🚨 SILENT EXIT
+      if (isDeletingAccount || error.code === "permission-denied") {
+        return;
+      }
+
+      console.error("Single Memory Subscription Error:", error);
+      if (onError) onError(error);
+    }
   );
 }
 
@@ -422,4 +468,13 @@ export async function getAllUserMemories(userId: string) {
     console.error("Hybrid Global Fetch Error:", err);
     return [];
   }
+}
+
+/**
+ * Permanently deletes a memory document.
+ * Enforced by Firestore rules: author-only.
+ */
+export async function deleteMemory(vaultId: string, memoryId: string) {
+  const ref = doc(db, 'vaults', vaultId, 'memories', memoryId);
+  await deleteDoc(ref);
 }

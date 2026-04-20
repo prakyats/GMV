@@ -1,24 +1,25 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Animated } from 'react-native';
 import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { getDocs, collection, query, where } from 'firebase/firestore';
-import { db } from '../../services/firebase';
-import { mapMemoryDoc, getAllUserMemories } from '../../services/memoryService';
-import { MainStackParamList } from '../../navigation/types';
-import { Memory } from '../../navigation/types';
-import { useAuthStore } from '../../store/authStore';
-import { getBestResurfacedMemory } from '../../algorithms/resurfaceEngine';
-import { getResurfacedMemories, DiscoveryBuckets } from '../../algorithms/discoveryEngine';
-import DiscoveryMemoryCard from '../../components/memory/DiscoveryMemoryCard';
-import { syncEngagementStats, EngagementStats } from '../../services/engagementService';
+import { db } from '@/services/firebase';
+import { mapMemoryDoc, getAllUserMemories } from '@/services/memoryService';
+import { MainStackParamList } from '@/navigation/types';
+import { Memory } from '@/navigation/types';
+import { useAuthStore } from '@/store/authStore';
+import { getBestResurfacedMemory } from '@/algorithms/resurfaceEngine';
+import { getResurfacedMemories, DiscoveryBuckets } from '@/algorithms/discoveryEngine';
+import DiscoveryMemoryCard from '@/components/memory/DiscoveryMemoryCard';
+import { syncEngagementStats, EngagementStats } from '@/services/engagementService';
 import { Ionicons } from '@expo/vector-icons';
 
 
 
 const OnThisDayScreen = () => {
   const navigation = useNavigation<NativeStackNavigationProp<MainStackParamList>>();
-  const { user } = useAuthStore();
+  const { user, isDeletingAccount } = useAuthStore();
 
   const [memories, setMemories] = useState<(Memory & { vaultId: string })[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,10 +31,11 @@ const OnThisDayScreen = () => {
 
   // ── Fetch memories from Firestore (Global Mode) ──────────────────────────
   const fetchMemories = useCallback(async () => {
+    if (!user?.uid || isDeletingAccount) return;
     try {
-      if (!user?.uid) return;
       setLoading(true);
       const data = await getAllUserMemories(user.uid);
+      if (isDeletingAccount) return;
       setMemories(data);
     } catch (err) {
       console.error('Failed to fetch global memories for OnThisDay:', err);
@@ -48,8 +50,9 @@ const OnThisDayScreen = () => {
 
   // ── Engagement sync ───────────────────────────────────────────────────────
   useEffect(() => {
-    if (!user) return;
+    if (!user || isDeletingAccount) return;
     syncEngagementStats(user.uid).then(res => {
+      if (isDeletingAccount) return;
       if (res) {
         setStats(res as EngagementStats);
         // isNewDay is true only if the streak was actually incremented today
@@ -57,7 +60,7 @@ const OnThisDayScreen = () => {
         setIsNewDay(res.isNewDay === true);
       }
     });
-  }, [user?.uid]);
+  }, [user?.uid, isDeletingAccount]);
 
   // ── Engine integration ───────────────────────────────────────────────────
   const today  = new Date();

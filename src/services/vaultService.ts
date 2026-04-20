@@ -1,23 +1,28 @@
 import { 
-  collection, 
-  addDoc, 
   doc, 
-  getDoc,
-  updateDoc, 
+  getDoc, 
+  getDocs, 
+  collection, 
+  query, 
+  where, 
+  orderBy, 
+  onSnapshot, 
+  limit, 
   arrayUnion, 
-  arrayRemove,
-  deleteDoc, 
+  arrayRemove, 
+  setDoc, 
+  updateDoc,
+  addDoc,
+  deleteDoc,
   serverTimestamp,
-  query,
-  where,
-  getDocs,
-  limit,
-  runTransaction,
-  onSnapshot,
+  runTransaction
 } from 'firebase/firestore';
-import { db } from './firebase';
+import { db } from '@/services/firebase';
+import { useAuthStore } from '../store/authStore';
+import { useVaultStore } from '../store/vaultStore';
 import { generateInviteCode } from '../utils/inviteCode';
 import { VaultMember } from '../navigation/types';
+import { getUserDisplayName } from '../utils/user';
 
 // ─── Utility: Normalize Legacy Member Data ────────────────────────────────
 /**
@@ -42,8 +47,15 @@ export const normalizeMemberProfiles = (
       }
     }
   }
-  // Normalize: every member UID has a profile entry
-  return members.map(uid => profileMap.get(uid) ?? { id: uid, name: 'Member' });
+  // Normalize: every member UID has a profile entry. 
+  // Proactively heal null/empty names with 'Member'
+  return members.map(uid => {
+    const existing = profileMap.get(uid);
+    return { 
+      id: uid, 
+      name: (existing?.name?.trim()) || 'Member' 
+    };
+  });
 };
 
 
@@ -181,7 +193,7 @@ export const fetchVaultDetails = async (vaultId: string) => {
 export const createVault = async (
   name: string,
   userId: string,
-  userName: string
+  user: { displayName?: string | null; email?: string | null }
 ): Promise<string> => {
   let vaultRef = null;
 
@@ -208,7 +220,7 @@ export const createVault = async (
 
     if (exists) throw new Error("Failed to generate unique invite code");
 
-    const safeUserName = (userName || 'Member').trim() || 'Member';
+    const safeUserName = getUserDisplayName(user).trim();
 
     // Create vault document with both member fields
     vaultRef = await addDoc(collection(db, "vaults"), {
@@ -253,7 +265,7 @@ export const createVault = async (
 export const joinVault = async (
   inviteCode: string,
   userId: string,
-  userName: string
+  user: { displayName?: string | null; email?: string | null }
 ) => {
   try {
     const trimmedCode = inviteCode.trim();
@@ -271,7 +283,7 @@ export const joinVault = async (
     const vaultDoc = snapshot.docs[0];
     const vaultId = vaultDoc.id;
     const vaultRef = doc(db, 'vaults', vaultId);
-    const safeUserName = (userName || 'Member').trim() || 'Member';
+    const safeUserName = getUserDisplayName(user).trim();
 
     const data = vaultDoc.data();
     if (!Array.isArray(data.members)) throw new Error("Invalid vault data");
@@ -383,6 +395,15 @@ export const leaveVault = async (vaultId: string, userId: string) => {
       transaction.update(userRef, { vaultIds: arrayRemove(vaultId) });
     });
 
+    // OPTIMISTIC UI UPDATE (P0 Consistency)
+    useVaultStore.getState().removeVault(vaultId);
+
+    // AFTER TRANSACTION (NON-NEGOTIABLE): Final synchronization safety net
+    // Ensures VaultList consistency even in edge cases where the transaction view is stale
+    await updateDoc(userRef, {
+      vaultIds: arrayRemove(vaultId)
+    });
+
   } catch (error) {
     console.error("Leave Vault Transaction Failed:", error);
     throw error;
@@ -395,19 +416,32 @@ export const leaveVault = async (vaultId: string, userId: string) => {
  */
 export const subscribeToVault = (
   vaultId: string,
-  onUpdate: (data: { members: string[]; memberProfiles: VaultMember[] }) => void
+  onUpdate: (snapshot: any) => void,
+  onError?: (error: any) => void
 ) => {
+  // 🚨 PRE-SUBSCRIBE GUARD
+  const initialAuth = useAuthStore.getState();
+  if (initialAuth.isDeletingAccount || !initialAuth.user) {
+    return () => {};
+  }
+
   const vaultRef = doc(db, 'vaults', vaultId);
   
   return onSnapshot(vaultRef, (snap) => {
-    if (!snap.exists()) return;
-    
-    const data = snap.data();
-    const members: string[] = data.members || [];
-    const profiles = normalizeMemberProfiles(members, data.memberProfiles);
-    
-    onUpdate({ members, memberProfiles: profiles });
+    // 🚨 GLOBAL HARD STOP
+    const { isDeletingAccount, user } = useAuthStore.getState();
+    if (isDeletingAccount || !user) return;
+
+    onUpdate(snap);
   }, (error) => {
+    const { isDeletingAccount } = useAuthStore.getState();
+
+    // 🚨 SILENT EXIT
+    if (isDeletingAccount || error.code === "permission-denied") {
+      return;
+    }
+
     console.error("Vault subscription error:", error);
+    if (onError) onError(error);
   });
 };

@@ -1,13 +1,12 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { 
   View, 
   Text, 
   StyleSheet, 
   Image, 
-  Pressable, 
   Animated, 
   useWindowDimensions, 
-  Easing,
   StatusBar,
   TouchableOpacity,
   ActivityIndicator
@@ -15,54 +14,70 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, useFocusEffect } from '@react-navigation/native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MainStackParamList, Memory } from '../../navigation/types';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useAuthStore } from '../../store/authStore';
-import { markMemoryViewed, subscribeToMemory } from '../../services/memoryService';
+import { useUIStore } from '../../store/uiStore';
+import { markMemoryViewed, subscribeToMemory, deleteMemory } from '../../services/memoryService';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
 import { ScalePressable } from '../../components';
 import { triggerHaptic } from '../../utils/haptics';
+import { formatUserDisplayName } from '../../utils/user';
 import MemoryReactions from '../../components/MemoryReactions';
 
 type MemoryDetailRouteProp = RouteProp<MainStackParamList, 'MemoryDetail'>;
 
 /**
  * MemoryDetailScreen
- * Refactored to support shared controlled reactions and real-time sync.
+ * Displays a single memory (image or text) with full attribution and moderation controls.
  */
 const MemoryDetailScreen = () => {
   const route = useRoute<MemoryDetailRouteProp>();
   const navigation = useNavigation();
-  const { memoryId, vaultId } = route.params;
-  const { user } = useAuthStore();
-  const { height: screenHeight } = useWindowDimensions();
-
-  const [memory, setMemory] = useState<Memory | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { memoryId, vaultId, memory: initialMemory } = route.params;
+  const { user, isDeletingAccount } = useAuthStore();
+  
+  // --- Core State ---
+  const [memory, setMemory] = useState<Memory | null>(initialMemory || null);
+  
+  // Guard: If we have partial image data but no URL, we must keep loading
+  const isImageReady = memory?.type === "image" && !!memory?.imageURL;
+  const shouldKeepLoading = !memory || (memory.type === "image" && !memory.imageURL);
+  
+  const [loading, setLoading] = useState(shouldKeepLoading);
   const [error, setError] = useState(false);
   const [openPicker, setOpenPicker] = useState(false);
   const [touchPos, setTouchPos] = useState({ x: 0, y: 0 });
   const [hasAnimated, setHasAnimated] = useState(false);
   const [isSharing, setIsSharing] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  // Sequenced animation values
+  // DEBUG LOGS (Temporary)
+  useEffect(() => {
+    console.log("🧠 Memory received:", memory?.id);
+    console.log("🧩 Memory type:", memory?.type);
+    console.log("🖼️ Image URL:", memory?.imageURL ? "Exists" : "Missing");
+    console.log("⏳ Loading state:", loading);
+    console.log("🛡️ Should keep loading:", shouldKeepLoading);
+  }, [memory, loading, shouldKeepLoading]);
+
+  // --- Animation Refs ---
   const imageFade = useRef(new Animated.Value(0)).current;
   const contentFade = useRef(new Animated.Value(0)).current;
   const reactionsFade = useRef(new Animated.Value(0)).current;
+  const hasExitedRef = useRef(false);
 
-  // 0. RESET ON ID CHANGE
-  useEffect(() => {
-    setMemory(null);
-    setError(false);
-    setLoading(true);
-    setHasAnimated(false);
-    imageFade.setValue(0);
-    contentFade.setValue(0);
-    reactionsFade.setValue(0);
-  }, [memoryId]);
+  // --- Helpers ---
+  const safeExit = useCallback(() => {
+    if (hasExitedRef.current) return;
+    hasExitedRef.current = true;
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    }
+  }, [navigation]);
 
-  // --- DERIVED RENDER DATA (MOVED TO TOP TO FIX SCOPE ERROR) ---
+  // --- Derived Data ---
   const hasImage = !!memory?.imageURL;
   const displayText = memory?.caption || "";
   const dateObj = (memory?.memoryDate || memory?.createdAt)
@@ -76,65 +91,144 @@ const MemoryDetailScreen = () => {
     day: 'numeric'
   });
 
-  // 1. REAL-TIME SUBSCRIPTION
-  useEffect(() => {
-    if (!vaultId || !memoryId) return;
+  const authorName = formatUserDisplayName(memory?.createdBy || {});
+  const isOwner = memory?.createdBy?.id === user?.uid;
+
+  // --- Handlers (Defined before hooks that use them) ---
+  const handleDelete = async () => {
+    if (isDeleting || !memoryId || !vaultId) return;
+
+    try {
+      setIsDeleting(true);
+      await deleteMemory(vaultId, memoryId);
+      
+      triggerHaptic('success');
+      useUIStore.getState().showToast("Memory deleted");
+      
+      safeExit();
+    } catch (err) {
+      console.error("Delete Error:", err);
+      useUIStore.getState().showAlert({
+        title: "Delete Failed",
+        message: "We couldn't delete this memory. Please check your connection and try again.",
+        type: "error"
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const confirmDelete = useCallback(() => {
+    if (isDeleting || isSharing) return;
+    triggerHaptic('error');
     
-    setLoading(true);
-    const unsubscribe = subscribeToMemory(vaultId, memoryId, (data) => {
-      if (!data) {
-        setError(true);
-      } else {
-        setMemory(data);
-        setError(false);
-      }
-      setLoading(false);
+    useUIStore.getState().showAlert({
+      title: "Delete Memory?",
+      message: "This will permanently remove this memory from the vault. This action cannot be undone.",
+      type: "confirm",
+      onConfirm: handleDelete,
     });
+  }, [isDeleting, isSharing, handleDelete]);
 
-    return () => unsubscribe();
-  }, [memoryId, vaultId]);
+  const handleShare = async () => {
+    if (isSharing || !memory?.imageURL) return;
 
-  // 1.5 NATIVE HEADER CONFIG (MUST BE BEFORE EARLY RETURNS)
+    try {
+      setIsSharing(true);
+      triggerHaptic('light');
+
+      const rawFilename = memory.imageURL.split('/').pop()?.split('?')[0] || 'shared-image.jpg';
+      const filename = decodeURIComponent(rawFilename).split('/').pop() || 'shared-image.jpg';
+      const fileUri = FileSystem.cacheDirectory + filename;
+
+      const downloaded = await FileSystem.downloadAsync(
+        memory.imageURL,
+        fileUri
+      );
+
+      if (downloaded.status === 200) {
+        await Sharing.shareAsync(fileUri);
+      }
+    } catch (error) {
+      useUIStore.getState().showAlert({
+        title: "Sharing Failed",
+        message: "We couldn't share this image. Please try again later.",
+        type: "error"
+      });
+    } finally {
+      setIsSharing(false);
+    }
+  };
+
+   useEffect(() => {
+     if (!vaultId || !memoryId) return;
+     
+     const unsubscribe = subscribeToMemory(
+       vaultId, 
+       memoryId, 
+       (data) => {
+         if (hasExitedRef.current || isDeletingAccount) {
+           safeExit();
+           return;
+         }
+         
+         if (!data) {
+           console.log("❌ Document not found or was deleted");
+           setMemory(null);
+           setLoading(false);
+           setError(true);
+           return;
+         }
+
+         // HARD GUARD: For image memories, do not stop loading until imageURL exists
+         if (data.type === "image" && !data.imageURL) {
+           console.log("⏳ Image URL still missing in Firestore, staying in loading state...");
+           setMemory(data);
+           setLoading(true);
+           // Show non-blocking toast for long-polling feedback
+           useUIStore.getState().showToast("Loading image...");
+           return;
+         }
+ 
+         setMemory(data);
+         setLoading(false);
+         setError(false);
+       },
+       (error) => {
+         if (error.code === 'permission-denied' || isDeletingAccount) {
+           safeExit();
+           return;
+         }
+       }
+     );
+ 
+     return () => unsubscribe();
+   }, [memoryId, vaultId, isDeletingAccount, safeExit]);
+
+  // --- Header Config (DISABLED NATIVE HEADER) ---
   React.useLayoutEffect(() => {
     navigation.setOptions({
-      headerShown: true,
-      headerTransparent: !hasImage,
-      headerStyle: hasImage ? { backgroundColor: '#000000', elevation: 0, shadowOpacity: 0 } : undefined,
-      headerTitle: '',
-      headerTintColor: '#FFFFFF',
-      headerRight: () => (
-        hasImage ? (
-          <ScalePressable 
-            onPress={handleShare} 
-            disabled={isSharing}
-            hitSlop={{ top: 20, bottom: 20, left: 20, right: 20 }}
-            style={{ opacity: isSharing ? 0.5 : 1, padding: 8, marginRight: 8 }}
-          >
-            <Ionicons name="share-outline" size={22} color="#FFFFFF" />
-          </ScalePressable>
-        ) : null
-      ),
+      headerShown: false,
     });
-  }, [navigation, hasImage, isSharing]);
+  }, [navigation]);
 
-  // 2. CONTROLLED SEQUENCING
+  const insets = useSafeAreaInsets();
+
+  // --- Animations ---
   useEffect(() => {
     if (memory && !hasAnimated) {
       Animated.sequence([
-        // 1. Image fades in first
         Animated.timing(imageFade, {
           toValue: 1,
           duration: 300,
           useNativeDriver: true,
         }),
-        // 2. Metadata fades in after 100ms
         Animated.delay(100),
         Animated.timing(contentFade, {
           toValue: 1,
           duration: 300,
           useNativeDriver: true,
         }),
-        // 3. Reactions fade in after 150ms
         Animated.delay(150),
         Animated.timing(reactionsFade, {
           toValue: 1,
@@ -145,7 +239,7 @@ const MemoryDetailScreen = () => {
     }
   }, [memory, hasAnimated]);
 
-  // 3. MARK VIEWED
+  // --- Mark Viewed ---
   useFocusEffect(
     useCallback(() => {
       if (!memoryId || !vaultId || !user) return;
@@ -153,45 +247,16 @@ const MemoryDetailScreen = () => {
     }, [vaultId, user, memoryId])
   );
 
-  // 4. HANDLERS
-  const handleShare = async () => {
-    if (isSharing || !memory?.imageURL) return;
-
-    try {
-      setIsSharing(true);
-      triggerHaptic('light');
-
-      // RESTORE ORIGINAL FILENAME RESOLUTION LOGIC (ZERO IMPROVEMENTS)
-      const rawFilename = memory.imageURL.split('/').pop()?.split('?')[0] || 'shared-image.jpg';
-      const filename = decodeURIComponent(rawFilename).split('/').pop() || 'shared-image.jpg';
-      const fileUri = FileSystem.cacheDirectory + filename;
-
-      const downloaded = await FileSystem.downloadAsync(
-        memory.imageURL,
-        fileUri
-      );
-
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(downloaded.uri);
-      }
-
-    } catch (e) {
-      console.warn('Share failed', e);
-    } finally {
-      setIsSharing(false);
-    }
-  };
-
-  // 5. RENDER GUARDS
-  if (loading) {
-    return (
-      <View style={[styles.centered, { backgroundColor: '#000' }]}>
-        <ActivityIndicator size="large" color="#6C63FF" />
-      </View>
-    );
-  }
-
-  if (error || !memory) {
+   // --- Render Guards ---
+   if (loading || (memory?.type === "image" && !memory.imageURL)) {
+     return (
+       <View style={[styles.centered, { backgroundColor: '#000' }]}>
+         <ActivityIndicator size="large" color="#6C63FF" />
+       </View>
+     );
+   }
+ 
+   if (error || !memory) {
     return (
       <View style={[styles.centered, { backgroundColor: '#000' }]}>
         <Text style={styles.errorText}>This memory is no longer available</Text>
@@ -202,9 +267,7 @@ const MemoryDetailScreen = () => {
     );
   }
 
-  // 3. MARK VIEWED (MOVED AFTER EARLY RETURNS)
-
-  const ContentWrapper = ({ children, style }: { children: React.ReactNode; style?: any }) => (
+  const ContentWrapper = ({ children }: { children: React.ReactNode }) => (
     <TouchableOpacity
       activeOpacity={1}
       onLongPress={(e) => {
@@ -213,7 +276,7 @@ const MemoryDetailScreen = () => {
         setOpenPicker(true);
       }}
       delayLongPress={250}
-      style={[{ flex: 1 }, style]}
+      style={{ flex: 1 }}
     >
       {children}
     </TouchableOpacity>
@@ -222,48 +285,83 @@ const MemoryDetailScreen = () => {
   return (
     <View style={styles.safeArea}>
       <StatusBar 
-        backgroundColor={hasImage ? "#000000" : "transparent"} 
-        translucent={!hasImage}
+        backgroundColor="#000000" 
+        translucent={false}
         barStyle="light-content" 
       />
+
+      {/* UNIFIED CUSTOM HEADER */}
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) }]}>
+        <TouchableOpacity 
+          onPress={() => navigation.goBack()}
+          style={styles.headerButton}
+          hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+        >
+          <Ionicons name="arrow-back" size={26} color="#FFFFFF" />
+        </TouchableOpacity>
+
+        <View style={styles.headerRight}>
+          {isOwner && (
+            <TouchableOpacity 
+              onPress={confirmDelete}
+              style={styles.deleteButton}
+              disabled={isDeleting || isSharing}
+              hitSlop={{ top: 20, bottom: 20, left: 20, right: 5 }}
+            >
+              <Text style={styles.deleteText}>Delete</Text>
+            </TouchableOpacity>
+          )}
+
+          {hasImage && (
+            <TouchableOpacity 
+              onPress={handleShare}
+              disabled={isSharing || isDeleting}
+              style={styles.headerButton}
+              hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
+            >
+              <Ionicons name="share-outline" size={26} color="#FFFFFF" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
       
       {hasImage ? (
-        <View style={styles.imageLayout} pointerEvents="box-none">
+        <View style={{ flex: 1 }}>
           <ContentWrapper>
-            <Animated.View style={[styles.imageContainer, { height: screenHeight * 0.65, opacity: imageFade }]}>
-              <Image 
-                source={{ uri: memory.imageURL! }} 
-                style={styles.image}
-                resizeMode="cover"
-              />
-            </Animated.View>
-            
-            <LinearGradient
-              colors={['transparent', 'rgba(0,0,0,0.8)', 'rgba(0,0,0,1)']}
-              style={styles.bottomOverlay}
-            >
-              <Animated.View style={[styles.imageContent, { opacity: contentFade }]}>
-                <Text style={styles.imageCaptionText}>{displayText}</Text>
-                <Text style={styles.imageDateText}>{formattedDate}</Text>
-                
-                <Animated.View style={[styles.reactionWrapper, { opacity: reactionsFade }]}>
-                  <MemoryReactions 
-                    vaultId={vaultId}
-                    memoryId={memoryId}
-                    reactions={memory.reactions}
-                    openPicker={openPicker}
-                    onClosePicker={() => setOpenPicker(false)}
-                    touchPosition={touchPos}
-                  />
-                </Animated.View>
+            <View style={styles.imageContainer}>
+              <Animated.View style={{ flex: 1, width: '100%', opacity: imageFade }}>
+                <Image 
+                  source={{ uri: memory.imageURL! }} 
+                  style={styles.image}
+                  resizeMode="contain"
+                  fadeDuration={0}
+                />
               </Animated.View>
-            </LinearGradient>
+            </View>
+            
+            <Animated.View style={[styles.metaContainer, { opacity: contentFade }]}>
+              <Text style={styles.authorName}>{authorName}</Text>
+              <Text style={styles.imageCaptionText}>{displayText}</Text>
+              <Text style={styles.imageDateText}>{formattedDate}</Text>
+              
+              <Animated.View style={[styles.reactionWrapper, { opacity: reactionsFade }]}>
+                <MemoryReactions 
+                  vaultId={vaultId}
+                  memoryId={memoryId}
+                  reactions={memory.reactions}
+                  openPicker={openPicker}
+                  onClosePicker={() => setOpenPicker(false)}
+                  touchPosition={touchPos}
+                />
+              </Animated.View>
+            </Animated.View>
           </ContentWrapper>
         </View>
       ) : (
         <ContentWrapper>
           <View style={styles.centeredLayout}>
             <Animated.View style={[styles.textHeroContainer, { opacity: contentFade }]}>
+              <Text style={styles.authorNameHero}>{authorName}</Text>
               <Text style={styles.heroText}>{displayText}</Text>
               <Text style={styles.heroDate}>{formattedDate}</Text>
 
@@ -290,34 +388,51 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#000000',
   },
-  container: {
-    flex: 1,
+  header: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    zIndex: 1000,
+    backgroundColor: 'transparent',
   },
-  headerShareButton: {
-    marginRight: 12,
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  headerButton: {
     padding: 8,
   },
-  imageLayout: {
-    flex: 1,
+  deleteButton: {
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    marginRight: 5,
+  },
+  deleteText: {
+    color: '#FF453A',
+    fontSize: 16,
+    fontWeight: '600',
   },
   imageContainer: {
-    width: '100%',
+    flex: 1,
+    backgroundColor: '#000000',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   image: {
     width: '100%',
     height: '100%',
   },
-  bottomOverlay: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    paddingTop: 100,
-    paddingBottom: 60,
-    paddingHorizontal: 20,
-  },
-  imageContent: {
+  metaContainer: {
     width: '100%',
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    paddingTop: 20,
+    backgroundColor: '#000000',
   },
   imageCaptionText: {
     color: '#FFFFFF',
@@ -330,6 +445,23 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
     fontSize: 14,
     fontWeight: '400',
+  },
+  authorName: {
+    color: '#6C63FF',
+    fontSize: 15,
+    fontWeight: '600',
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  authorNameHero: {
+    color: '#6C63FF',
+    fontSize: 14,
+    fontWeight: '600',
+    marginBottom: 16,
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    textAlign: 'center',
   },
   reactionWrapper: {
     marginTop: 16,
@@ -380,8 +512,6 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     backgroundColor: '#1C1C1E',
     borderRadius: 12,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: '#38383A',
   },
   retryText: {
     color: '#6C63FF',

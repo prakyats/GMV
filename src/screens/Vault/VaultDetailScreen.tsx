@@ -19,6 +19,7 @@ import {
   InteractionManager,
   StatusBar,
   Easing,
+  AppState,
 } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRoute, useNavigation, RouteProp, CompositeNavigationProp } from '@react-navigation/native';
@@ -33,6 +34,7 @@ import {
 } from '../../navigation/types';
 import { useAuthStore } from '../../store/authStore';
 import { useVaultStore } from '../../store/vaultStore';
+import { useUIStore } from '../../store/uiStore';
 import {
   addMemory,
   subscribeToMemories,
@@ -40,7 +42,7 @@ import {
   mapMemoryDoc,
   mergeAndSort,
 } from '../../services/memoryService';
-import { leaveVault, fetchVaultDetails } from '../../services/vaultService';
+import { leaveVault, fetchVaultDetails, subscribeToVault } from '../../services/vaultService';
 import {
   Timestamp,
   collection,
@@ -49,6 +51,10 @@ import {
   orderBy,
   startAfter,
   limit,
+  DocumentChange,
+  doc,
+  updateDoc,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { ImagePickerButton, MemoryCard, ScalePressable } from '../../components';
 import { compressImage } from '../../utils/imageCompressor';
@@ -56,6 +62,7 @@ import { uploadImage } from '../../services/storage';
 import LoadingSkeleton from '../../components/LoadingSkeleton';
 import { ANIMATION } from '../../constants/theme';
 import { triggerHaptic } from '../../utils/haptics';
+import { getUserDisplayName, formatUserDisplayName } from '../../utils/user';
 import { VaultMember } from '../../navigation/types';
 import MemberAvatarStrip from '../../components/common/MemberAvatarStrip';
 
@@ -71,8 +78,8 @@ const PAGE_SIZE = 15;
 const VaultDetailScreen = () => {
   const route = useRoute<VaultDetailRouteProp>();
   const navigation = useNavigation<VaultDetailNavigationProp>();
-  const { vaultId, vaultName } = route.params || {};
-  const { user } = useAuthStore();
+  const { vaultId, vaultName, memoryId } = route.params || {};
+  const { user, isDeletingAccount } = useAuthStore();
   const tabBarHeight = useBottomTabBarHeight();
 
   // ─── Member state ─────────────────────────────────────────────────────────
@@ -101,6 +108,23 @@ const VaultDetailScreen = () => {
   const showSettingsRef = useRef(false);
   
   const insets = useSafeAreaInsets();
+  
+  // ─── Stability Guards (Production Hardened) ──────────────
+  const hasExitedRef = useRef(false);
+  const hasMountedRef = useRef(false);
+  const activeVaultSetRef = useRef(false);
+
+  const safeExit = () => {
+    if (hasExitedRef.current) return;
+    hasExitedRef.current = true;
+    
+    // 🚨 FLUSH MEMORY CACHE IMMEDIATELY
+    setMemories([]);
+
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    }
+  };
   
   // Sync ref for BackHandler
   useEffect(() => {
@@ -155,6 +179,66 @@ const VaultDetailScreen = () => {
         .catch(() => {}); // Non-critical — strip just stays empty
     }
   }, [fadeAnim, fabScale, vaultId]);
+  
+  // ─── Presence Tracking (Notification-Aware) ───────────────────────────
+  const clearActiveVault = async () => {
+    if (!user?.uid) return;
+    try {
+      await updateDoc(doc(db, "users", user.uid), {
+        activeVault: null
+      });
+      activeVaultSetRef.current = false;
+    } catch (err) {
+      console.warn("Presence: Clear failed", err);
+    }
+  };
+
+  useEffect(() => {
+    if (!vaultId || !user?.uid) return;
+
+    const setActiveVault = async () => {
+      try {
+        await updateDoc(doc(db, "users", user.uid), {
+          activeVault: {
+            id: vaultId,
+            updatedAt: serverTimestamp()
+          }
+        });
+        activeVaultSetRef.current = true;
+      } catch (err) {
+        console.warn("Presence: Set failed", err);
+      }
+    };
+
+    setActiveVault();
+
+    // Clear on unmount
+    return () => {
+      clearActiveVault();
+    };
+  }, [vaultId, user?.uid]);
+
+  useEffect(() => {
+    // Clear on background to ensure user gets notifications when multi-tasking
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "active") {
+        clearActiveVault();
+      } else if (state === "active" && vaultId) {
+        // Re-set when coming back to the vault
+        if (!activeVaultSetRef.current) {
+          updateDoc(doc(db, "users", user!.uid), {
+            activeVault: {
+              id: vaultId,
+              updatedAt: serverTimestamp()
+            }
+          }).then(() => {
+            activeVaultSetRef.current = true;
+          }).catch(() => {});
+        }
+      }
+    });
+    return () => sub.remove();
+  }, [vaultId, user?.uid]);
 
   /**
    * Pagination cursor architecture (two separate refs):
@@ -179,11 +263,13 @@ const VaultDetailScreen = () => {
    */
   const onEndReachedCalledDuringMomentum = useRef(false);
 
-  // ─── Real-time subscription + vault reset ────────────────────────────────
+  // ─── Real-time Subscriptions (Atomic Lifecycle) ───────────────────────────
   useEffect(() => {
-    if (!vaultId) return;
+    if (!vaultId || !user?.uid) return;
+    if (hasMountedRef.current) return;
+    hasMountedRef.current = true;
 
-    // Full reset when vaultId changes (vault switch guard — Bug 6)
+    // Full reset when vaultId changes
     setMemories([]);
     setHasMore(true);
     setLoading(true);
@@ -191,10 +277,63 @@ const VaultDetailScreen = () => {
     initialLastDocRef.current = null;
     paginationCursorRef.current = null;
 
-    const unsubscribe = subscribeToMemories(
+    // A. MEMBERSHIP GUARD (P0 Stabilizer)
+    const unsubVault = subscribeToVault(
+      vaultId,
+      (snap) => {
+        if (hasExitedRef.current || isLeaving || isDeletingAccount) {
+          safeExit();
+          return;
+        }
+        
+        if (!snap.exists()) {
+          safeExit();
+          return;
+        }
+
+        const data = snap.data();
+        if (hasExitedRef.current || isLeaving || isDeletingAccount || !data.members?.includes(user!.uid)) {
+          safeExit();
+          return;
+        }
+
+        // Update profiles for the UI
+        const profiles = data.memberProfiles || [];
+        setMemberProfiles(profiles);
+        setVaultCreatedBy(data.createdBy || '');
+
+        // Sync with VaultStore for memory creation (P0 consistency)
+        useVaultStore.getState().setCurrentVault(vaultId, data.members || []);
+      },
+      (error) => {
+        if (error.code === "permission-denied" || isDeletingAccount) {
+          safeExit();
+          return;
+        }
+      }
+    );
+
+    // B. MEMORY FEED
+    const unsubMemories = subscribeToMemories(
       vaultId,
       (realtimeMemories, snapshot) => {
-        setMemories(prev => mergeAndSort(prev, realtimeMemories));
+        // 🚨 SENTINEL GUARD (Production Hardened)
+        if (hasExitedRef.current || isLeaving || isDeletingAccount || !user) {
+          safeExit();
+          return;
+        }
+
+        const removedIds = snapshot.docChanges()
+          .filter((change: DocumentChange) => change.type === 'removed')
+          .map((change: DocumentChange) => change.doc.id);
+
+        setMemories(prev => {
+          let updated = mergeAndSort(prev, realtimeMemories);
+          if (removedIds.length > 0) {
+            updated = updated.filter(m => !removedIds.includes(m.id));
+          }
+          return updated;
+        });
 
         // Capture initial cursor only once (Bug 4 fix)
         if (!initialLastDocRef.current && snapshot.docs.length > 0) {
@@ -211,18 +350,72 @@ const VaultDetailScreen = () => {
         setLoading(false);
       },
       PAGE_SIZE,
-      () => {
+      (err) => {
+        if (hasExitedRef.current || isDeletingAccount) {
+          safeExit();
+          return;
+        }
+        if (err?.code === 'permission-denied') {
+          safeExit();
+          return;
+        }
         setError("Failed to sync memories");
         setLoading(false);
       }
     );
 
-    return () => unsubscribe();
-  }, [vaultId]);
+    return () => {
+      unsubVault();
+      unsubMemories();
+    };
+  }, [vaultId, user?.uid, isLeaving]);
+
+  // ─── Auto-Open Memory (Deep Link Hook) ────────────────────────────────────
+  useEffect(() => {
+    if (!memoryId || !memories.length) return;
+
+    console.log("🎯 Deep link detected for memory:", memoryId);
+    const start = Date.now();
+
+    const interval = setInterval(() => {
+      const target = memories.find(m => m.id === memoryId);
+
+      if (target) {
+        console.log("✅ Target memory found:", target.id);
+        clearInterval(interval);
+
+        // Open memory detail with full object for zero-flicker
+        navigation.navigate("MemoryDetail", { 
+          memoryId: target.id,
+          vaultId: vaultId!,
+          memory: target 
+        });
+
+        // Clear param so it doesn't reopen on back navigation
+        navigation.setParams({ memoryId: undefined });
+      }
+
+      // Fallback: 3s timeout
+      if (Date.now() - start > 3000) {
+        clearInterval(interval);
+        console.log("⚠️ Deep link timeout: memory not found in feed list");
+        // Clear param to avoid redundant checks
+        navigation.setParams({ memoryId: undefined });
+      }
+    }, 200);
+
+    return () => clearInterval(interval);
+  }, [memoryId, memories, vaultId, navigation]);
 
   // ─── Pagination ───────────────────────────────────────────────────────────
   const loadMore = async () => {
-    // All guards must pass before any network call (Bug 5 + 7 fix)
+    // Hard Guards (P0 stability)
+    if (hasExitedRef.current || isLeaving || isDeletingAccount || !user) return;
+    
+    // Check membership from Store (SSoT) before network request
+    const { currentVaultMembers } = useVaultStore.getState();
+    if (!user?.uid || !currentVaultMembers.includes(user.uid)) return;
+
     if (loadingMore || !hasMore || !paginationCursorRef.current || !vaultId) return;
 
     try {
@@ -270,7 +463,16 @@ const VaultDetailScreen = () => {
 
   // ─── Post memory ──────────────────────────────────────────────────────────
   const handleAddMemory = async () => {
-    if (isAdding || !vaultId || !user?.uid) return;
+    const { currentVaultMembers } = useVaultStore.getState();
+    if (
+      hasExitedRef.current || 
+      isLeaving || 
+      isAdding || 
+      !vaultId || 
+      !user?.uid || 
+      isDeletingAccount ||
+      !currentVaultMembers.includes(user.uid)
+    ) return;
     const text = newMemory.trim();
     if (!text && !selectedImage) return;
 
@@ -289,29 +491,34 @@ const VaultDetailScreen = () => {
       try {
         const finalCaption = text.trim();
         if (!finalCaption && !imageURL) {
-          Alert.alert('Empty Memory', 'Please add a caption or a photo before saving.');
+          useUIStore.getState().showAlert({
+            title: "Empty Memory",
+            message: "Please add a caption or a photo before saving.",
+            type: "error"
+          });
           return;
         }
 
         if (finalCaption.length >= 500) {
-          Alert.alert('Too Long', 'Captions must be under 500 characters.');
+          useUIStore.getState().showAlert({
+            title: "Too Long",
+            message: "Captions must be under 500 characters.",
+            type: "error"
+          });
           return;
         }
 
-        const userName = user.displayName?.trim() || (user.email ? user.email.split('@')[0] : '');
-        if (!userName) {
-          Alert.alert('Profile Incomplete', 'Please set a name in your profile before posting memories.');
-          return;
-        }
-
+        // Attribution resolution moved to service layer
         await addMemory(vaultId, {
           type: selectedImage ? 'image' : 'text',
           caption: finalCaption,
           imageURL,
           createdBy: {
             id: user.uid,
-            name: userName,
-          },
+            name: '', // Will be resolved by service using displayName/email
+            displayName: user.displayName,
+            email: user.email,
+          } as any,
           memoryDate: Timestamp.fromDate(selectedDate),
           members: currentVaultMembers,
         });
@@ -325,11 +532,19 @@ const VaultDetailScreen = () => {
 
       } catch (addError) {
         console.error('Memory creation failed:', addError);
-        Alert.alert('Error', 'Could not save memory. Please check your connection and try again.');
+        useUIStore.getState().showAlert({
+          title: "Error",
+          message: "Could not save memory. Please check your connection and try again.",
+          type: "error"
+        });
       }
     } catch (err: any) {
       if (err.message === 'IMAGE_TOO_LARGE') {
-        Alert.alert('Image too large', 'Try a smaller image (max 5MB after compression).');
+        useUIStore.getState().showAlert({
+          title: "Image too large",
+          message: "Try a smaller image (max 5MB after compression).",
+          type: "error"
+        });
       } else {
         // Generic catch-all for potential internal errors (e.g. compression failed)
         console.error('Add Memory UI error:', err);
@@ -380,23 +595,18 @@ const VaultDetailScreen = () => {
     triggerHaptic('medium');
     
     closeSettings(() => {
-      Alert.alert(
-        "Leave Vault?",
-        "You will lose access to all memories in this vault.",
-        [
-          { text: "Cancel", style: "cancel" },
-          { 
-            text: "Leave", 
-            style: "destructive", 
-            onPress: confirmLeave 
-          },
-        ]
-      );
+      useUIStore.getState().showAlert({
+        title: "Leave Vault?",
+        message: "You will lose access to all memories in this vault.",
+        type: "confirm",
+        onConfirm: confirmLeave,
+        onCancel: () => useUIStore.getState().hideAlert()
+      });
     });
   };
 
   const confirmLeave = async () => {
-    if (isLeaving) return;
+    if (hasExitedRef.current || isLeaving || isDeletingAccount) return;
     
     try {
       setIsLeaving(true);
@@ -407,15 +617,16 @@ const VaultDetailScreen = () => {
       
       requestAnimationFrame(() => {
         InteractionManager.runAfterInteractions(() => {
-          navigation.goBack();
+          safeExit();
         });
       });
     } catch (error: any) {
       console.warn('LEAVE VAULT ERROR:', error.code, error.message);
-      Alert.alert(
-        "Something went wrong",
-        "Couldn't leave the vault. Please try again."
-      );
+      useUIStore.getState().showAlert({
+        title: "Something went wrong",
+        message: "Couldn't leave the vault. Please try again.",
+        type: "error"
+      });
     } finally {
       setIsLeaving(false);
     }

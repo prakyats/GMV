@@ -17,6 +17,7 @@ import MemoryReactions, { EMOJIS } from './MemoryReactions';
 import { ScalePressable } from './common/ScalePressable';
 import { FadeInStagger } from './common/FadeInStagger';
 import { triggerHaptic } from '../utils/haptics';
+import { formatUserDisplayName } from '../utils/user';
 
 type NavigationProp = NativeStackNavigationProp<MainStackParamList>;
 
@@ -79,7 +80,7 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId, index }) => {
               <Text style={styles.poster}>
                 {memory.createdBy.id === user?.uid 
                   ? "You" 
-                  : (memory.createdBy.name?.trim() || "Member")}
+                  : formatUserDisplayName(memory.createdBy)}
               </Text>
               <Text style={styles.date}>{dateObj.toDateString()}</Text>
             </View>

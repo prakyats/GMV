@@ -1,16 +1,26 @@
 import { create } from 'zustand';
-import { User } from 'firebase/auth';
+
+export interface AppUser {
+  uid: string;
+  displayName: string | null;
+  email: string | null;
+  photoURL: string | null;
+}
 
 interface AuthState {
-  user: User | null;
+  user: AppUser | null;
   loading: boolean;
-  setUser: (user: User | null) => void;
+  isDeletingAccount: boolean;
+  setUser: (user: AppUser | null) => void;
   setLoading: (loading: boolean) => void;
+  setIsDeletingAccount: (val: boolean) => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: null,
   loading: true,
+  isDeletingAccount: false,
   setUser: (user) => set({ user }),
   setLoading: (loading) => set({ loading }),
+  setIsDeletingAccount: (val) => set({ isDeletingAccount: val }),
 }));

@@ -9,11 +9,13 @@ import {
   ActivityIndicator,
   Animated,
 } from 'react-native';
-import { useRoute, RouteProp } from '@react-navigation/native';
+import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { VaultStackParamList, VaultMember } from '../../navigation/types';
 import { useAuthStore } from '../../store/authStore';
 import { subscribeToVault } from '../../services/vaultService';
 import { ANIMATION } from '../../constants/theme';
+import { getUserDisplayName, formatUserDisplayName, getSortableName } from '../../utils/user';
 import MemberAvatar from '../../components/common/MemberAvatar';
 
 type VaultMembersRouteProp = RouteProp<VaultStackParamList, 'VaultMembers'>;
@@ -46,7 +48,7 @@ const MemberRow: React.FC<MemberRowProps> = ({ member, isCurrentUser, isOwner })
     />
     <View style={styles.rowText}>
       <Text style={styles.memberName} numberOfLines={1}>
-        {member.name}
+        {formatUserDisplayName(member)}
       </Text>
       <View style={styles.badgeRow}>
         {isOwner && (
@@ -67,13 +69,26 @@ const MemberRow: React.FC<MemberRowProps> = ({ member, isCurrentUser, isOwner })
 // ─── Main Screen ──────────────────────────────────────────────────────────
 const VaultMembersListScreen = () => {
   const route = useRoute<VaultMembersRouteProp>();
+  const navigation = useNavigation<NativeStackNavigationProp<VaultStackParamList, 'VaultMembers'>>();
   const { vaultId, createdBy } = route.params;
-  const { user } = useAuthStore();
+  const { user, isDeletingAccount } = useAuthStore();
 
   const [memberProfiles, setMemberProfiles] = useState<VaultMember[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+
+  // ─── Stability Guards ──────────────────────────────────────────────────
+  const hasExitedRef = useRef(false);
+
+  const safeExit = useCallback(() => {
+    if (hasExitedRef.current) return;
+    hasExitedRef.current = true;
+    
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+    }
+  }, [navigation]);
 
   // ─── Live Subscription ─────────────────────────────────────────────────
   useEffect(() => {
@@ -81,24 +96,46 @@ const VaultMembersListScreen = () => {
     setError(null);
 
     try {
-      const unsub = subscribeToVault(vaultId, ({ memberProfiles: profiles }) => {
-        setMemberProfiles(profiles);
-        setLoading(false);
+      const unsub = subscribeToVault(
+        vaultId, 
+        (snap) => {
+          if (hasExitedRef.current || isDeletingAccount) {
+            safeExit();
+            return;
+          }
+          
+          if (!snap.exists()) {
+            safeExit();
+            return;
+          }
 
-        // Fade in on first load
-        Animated.timing(fadeAnim, {
-          toValue: 1,
-          duration: ANIMATION.FADE_DURATION,
-          useNativeDriver: true,
-        }).start();
-      });
+          const data = snap.data();
+          setMemberProfiles(data.memberProfiles || []);
+          setLoading(false);
+
+          // Fade in on first load
+          Animated.timing(fadeAnim, {
+            toValue: 1,
+            duration: ANIMATION.FADE_DURATION,
+            useNativeDriver: true,
+          }).start();
+        },
+        (error) => {
+          if (error.code === "permission-denied" || isDeletingAccount) {
+            safeExit();
+            return;
+          }
+          setError('Unable to load members.');
+          setLoading(false);
+        }
+      );
       return unsub;
     } catch (e) {
       setError('Unable to load members right now.');
       setLoading(false);
       return undefined;
     }
-  }, [vaultId, fadeAnim]); // Added fadeAnim to deps to satisfy lint
+  }, [vaultId, fadeAnim, isDeletingAccount, safeExit]);
 
   // ─── Sort: creator → current user → alphabetical ───────────────────────
   const sortedMembers = useMemo<VaultMember[]>(() => {
@@ -109,8 +146,9 @@ const VaultMembersListScreen = () => {
       // Current user second
       if (a.id === user?.uid && b.id !== user?.uid) return -1;
       if (b.id === user?.uid && a.id !== user?.uid) return 1;
-      // Alphabetical by name
-      return a.name.localeCompare(b.name);
+      
+      // Alphabetical using stable sortable name
+      return getSortableName(a).localeCompare(getSortableName(b));
     });
   }, [memberProfiles, createdBy, user?.uid]);
 
