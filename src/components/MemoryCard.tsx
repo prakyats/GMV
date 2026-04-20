@@ -12,9 +12,11 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainStackParamList } from '../navigation/types';
 import { useAuthStore } from '../store/authStore';
-import { Memory, toggleReaction } from '../services/memoryService';
+import { useUserStore } from '../store/userStore';
+import { Memory } from '../services/memoryService';
 import MemoryReactions, { EMOJIS } from './MemoryReactions';
 import { ScalePressable } from './common/ScalePressable';
+import MemberAvatar from './common/MemberAvatar';
 import { FadeInStagger } from './common/FadeInStagger';
 import { triggerHaptic } from '../utils/haptics';
 import { formatUserDisplayName } from '../utils/user';
@@ -34,6 +36,7 @@ interface MemoryCardProps {
 const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId, index }) => {
   const navigation = useNavigation<NavigationProp>();
   const { user } = useAuthStore();
+  const { usersMap } = useUserStore();
   const [openPicker, setOpenPicker] = useState(false);
   const [touchPos, setTouchPos] = useState({ x: 0, y: 0 });
 
@@ -77,10 +80,23 @@ const MemoryCard: React.FC<MemoryCardProps> = ({ memory, vaultId, index }) => {
             ) : null}
             
             <View style={styles.footer}>
+              {/* ENRICHED POSTER AVATAR */}
+              <View style={styles.posterAvatar}>
+                <MemberAvatar 
+                  member={{
+                    ...memory.createdBy,
+                    ...(usersMap[memory.createdBy.id] || {}), // Real-time peer data
+                    ...(memory.createdBy.id === user?.uid ? user : {}) // Local self priority
+                  }}
+                  isCurrentUser={memory.createdBy.id === user?.uid}
+                  isOwner={false} 
+                  size={20}
+                />
+              </View>
               <Text style={styles.poster}>
                 {memory.createdBy.id === user?.uid 
                   ? "You" 
-                  : formatUserDisplayName(memory.createdBy)}
+                  : (usersMap[memory.createdBy.id]?.displayName || formatUserDisplayName(memory.createdBy))}
               </Text>
               <Text style={styles.date}>{dateObj.toDateString()}</Text>
             </View>
@@ -145,6 +161,10 @@ const styles = StyleSheet.create({
     color: '#8E8E93',
     fontSize: 13,
     fontWeight: '600',
+    marginLeft: 6,
+  },
+  posterAvatar: {
+    marginRight: 0,
   },
   reactionContainer: {
     marginTop: 0,

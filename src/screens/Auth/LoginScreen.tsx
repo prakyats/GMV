@@ -9,6 +9,7 @@ import {
 } from 'react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { AuthStackParamList } from '../../navigation/types';
+import { Ionicons } from "@expo/vector-icons";
 import { authService } from '../../services/authService';
 
 type Props = NativeStackScreenProps<AuthStackParamList, 'Login'>;
@@ -18,6 +19,7 @@ const LoginScreen = ({ navigation }: Props) => {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleLogin = async () => {
     if (loading) return;
@@ -70,17 +72,29 @@ const LoginScreen = ({ navigation }: Props) => {
           autoCapitalize="none"
           keyboardType="email-address"
         />
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor="#8E8E93"
-          value={password}
-          onChangeText={(text) => {
-            setPassword(text);
-            if (error) setError(null);
-          }}
-          secureTextEntry
-        />
+        <View style={styles.passwordContainer}>
+          <TextInput
+            style={styles.passwordInput}
+            placeholder="Password"
+            placeholderTextColor="#8E8E93"
+            value={password}
+            onChangeText={(text) => {
+              setPassword(text);
+              if (error) setError(null);
+            }}
+            secureTextEntry={!showPassword}
+          />
+          <TouchableOpacity
+            onPress={() => setShowPassword(!showPassword)}
+            style={styles.eyeIcon}
+          >
+            <Ionicons
+              name={showPassword ? "eye-off" : "eye"}
+              size={22}
+              color="#8E8E93"
+            />
+          </TouchableOpacity>
+        </View>
       </View>
 
 
@@ -144,6 +158,28 @@ const styles = StyleSheet.create({
     fontSize: 17,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: '#38383A',
+  },
+  passwordContainer: {
+    width: "100%",
+    position: "relative",
+    marginBottom: 16,
+  },
+  passwordInput: {
+    width: "100%",
+    height: 56,
+    backgroundColor: "#1C1C1E",
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    paddingRight: 50,
+    color: "#FFFFFF",
+    fontSize: 17,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: "#38383A",
+  },
+  eyeIcon: {
+    position: "absolute",
+    right: 15,
+    top: 17,
   },
   errorText: {
     color: '#FF453A',

@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, Image } from 'react-native';
 import { VaultMember } from '../../navigation/types';
 import { getUserInitial } from '../../utils/user';
 
@@ -41,6 +41,7 @@ const MemberAvatar: React.FC<MemberAvatarProps> = ({
   isOwner,
   size = 36,
 }) => {
+  const [loadError, setLoadError] = useState(false);
   const bgColor = getAvatarColor(member.id);
   const initial = getUserInitial(member);
 
@@ -61,9 +62,17 @@ const MemberAvatar: React.FC<MemberAvatarProps> = ({
 
   return (
     <View style={styles.wrapper}>
-      <View style={[styles.avatar, avatarStyle]}>
-        <Text style={initialsStyle}>{initial}</Text>
-      </View>
+      {member.photoURL && !loadError ? (
+        <Image 
+          source={{ uri: member.photoURL }} 
+          style={[styles.avatar, avatarStyle, { borderWidth: avatarStyle.borderWidth, borderColor: avatarStyle.borderColor }]} 
+          onError={() => setLoadError(true)}
+        />
+      ) : (
+        <View style={[styles.avatar, avatarStyle]}>
+          <Text style={initialsStyle}>{initial}</Text>
+        </View>
+      )}
       {isOwner && (
         <View style={styles.crownBadge}>
           <Text style={styles.crownText}>👑</Text>

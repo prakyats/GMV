@@ -17,6 +17,8 @@ import { subscribeToVault } from '../../services/vaultService';
 import { ANIMATION } from '../../constants/theme';
 import { getUserDisplayName, formatUserDisplayName, getSortableName } from '../../utils/user';
 import MemberAvatar from '../../components/common/MemberAvatar';
+import { useUserSync } from '../../hooks/useUserSync';
+import { useUserStore } from '../../store/userStore';
 
 type VaultMembersRouteProp = RouteProp<VaultStackParamList, 'VaultMembers'>;
 
@@ -77,6 +79,17 @@ const VaultMembersListScreen = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(0)).current;
+  const { usersMap } = useUserStore();
+
+  // targeted sync for all members in this list
+  useUserSync(memberProfiles.map(m => m.id));
+
+  // ENRICHMENT: Priority rule (Zustand(Self) > usersMap(Peer) > Fallback)
+  const enrichedMembers = memberProfiles.map(m => ({
+    ...m,
+    ...(usersMap[m.id] || {}), // Real-time peer data
+    ...(m.id === user?.uid ? user : {}) // Local self priority
+  }));
 
   // ─── Stability Guards ──────────────────────────────────────────────────
   const hasExitedRef = useRef(false);
@@ -110,7 +123,8 @@ const VaultMembersListScreen = () => {
           }
 
           const data = snap.data();
-          setMemberProfiles(data.memberProfiles || []);
+          const rawProfiles = data.memberProfiles || [];
+          setMemberProfiles(rawProfiles);
           setLoading(false);
 
           // Fade in on first load
@@ -138,8 +152,8 @@ const VaultMembersListScreen = () => {
   }, [vaultId, fadeAnim, isDeletingAccount, safeExit]);
 
   // ─── Sort: creator → current user → alphabetical ───────────────────────
-  const sortedMembers = useMemo<VaultMember[]>(() => {
-    return [...memberProfiles].sort((a, b) => {
+  const sortedMembers = useMemo(() => {
+    return [...enrichedMembers].sort((a, b) => {
       // Creator always first
       if (a.id === createdBy && b.id !== createdBy) return -1;
       if (b.id === createdBy && a.id !== createdBy) return 1;
@@ -150,7 +164,7 @@ const VaultMembersListScreen = () => {
       // Alphabetical using stable sortable name
       return getSortableName(a).localeCompare(getSortableName(b));
     });
-  }, [memberProfiles, createdBy, user?.uid]);
+  }, [enrichedMembers, createdBy, user?.uid]);
 
   // ─── Retry ─────────────────────────────────────────────────────────────
   const handleRetry = useCallback(() => {

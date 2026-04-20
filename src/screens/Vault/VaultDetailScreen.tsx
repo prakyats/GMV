@@ -65,6 +65,8 @@ import { triggerHaptic } from '../../utils/haptics';
 import { getUserDisplayName, formatUserDisplayName } from '../../utils/user';
 import { VaultMember } from '../../navigation/types';
 import MemberAvatarStrip from '../../components/common/MemberAvatarStrip';
+import { useUserSync } from '../../hooks/useUserSync';
+import { useUserStore } from '../../store/userStore';
 
 type VaultDetailRouteProp = RouteProp<VaultStackParamList, 'VaultDetail'>;
 
@@ -83,8 +85,19 @@ const VaultDetailScreen = () => {
   const tabBarHeight = useBottomTabBarHeight();
 
   // ─── Member state ─────────────────────────────────────────────────────────
-  const [memberProfiles, setMemberProfiles] = useState<VaultMember[]>([]);
+  const [memberProfiles, setMemberProfiles] = useState<any[]>([]);
   const [vaultCreatedBy, setVaultCreatedBy] = useState<string>('');
+  const { usersMap } = useUserStore();
+
+  // Targeted Sync: Subscribe to all members of this vault
+  useUserSync(memberProfiles.map(m => m.id));
+
+  // Enrichment Logic: Priority - Zustand(Self) > usersMap(Peer) > Fallback
+  const enrichedMembers = memberProfiles.map(m => ({
+    ...m,
+    ...(usersMap[m.id] || {}), // Real-time peer data
+    ...(m.id === user?.uid ? user : {}) // Local self priority
+  }));
 
   // ─── Feed state ───────────────────────────────────────────────────────────
   const [memories, setMemories] = useState<Memory[]>([]);
@@ -297,9 +310,19 @@ const VaultDetailScreen = () => {
           return;
         }
 
-        // Update profiles for the UI
-        const profiles = data.memberProfiles || [];
-        setMemberProfiles(profiles);
+        // Update profiles for the UI with Zustand fallback
+        const rawProfiles = data.memberProfiles || [];
+        const enrichedProfiles = rawProfiles.map((member: VaultMember) => {
+          if (member.id === user!.uid) {
+            return {
+              ...member,
+              displayName: user!.displayName,
+              photoURL: user!.photoURL,
+            };
+          }
+          return member;
+        });
+        setMemberProfiles(enrichedProfiles);
         setVaultCreatedBy(data.createdBy || '');
 
         // Sync with VaultStore for memory creation (P0 consistency)
@@ -669,7 +692,7 @@ const VaultDetailScreen = () => {
         ListHeaderComponent={
           memberProfiles.length > 0 ? (
             <MemberAvatarStrip
-              memberProfiles={memberProfiles}
+              memberProfiles={enrichedMembers}
               createdBy={vaultCreatedBy}
               currentUserId={user?.uid || ''}
               onPress={() =>
