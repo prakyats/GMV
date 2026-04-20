@@ -11,14 +11,16 @@ import AppNavigator from './src/navigation/AppNavigator';
  */
 export default function App() {
   return (
-    <GestureHandlerRootView style={styles.container}>
-      <SafeAreaProvider>
-        <View style={styles.container}>
-          <StatusBar style="light" />
-          <AppNavigator />
-        </View>
-      </SafeAreaProvider>
-    </GestureHandlerRootView>
+    <View style={styles.container}>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <SafeAreaProvider>
+          <View style={styles.container}>
+            <StatusBar style="light" />
+            <AppNavigator />
+          </View>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
+    </View>
   );
 }
 
